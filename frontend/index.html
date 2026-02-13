@@ -1,48 +1,368 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Connect Slack</title>
+  <meta charset="utf-8" />
+  <title>Slack Chatbot Dashboard (Full MVP)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: Arial, sans-serif; display:flex; min-height:100vh; align-items:center; justify-content:center; background:#0b1220; color:#fff; }
-    .card { width: 420px; padding: 28px; border-radius: 14px; background:#111a2e; box-shadow: 0 12px 30px rgba(0,0,0,.35); }
-    h1 { margin:0 0 10px; font-size: 22px; }
-    p { margin:0 0 18px; opacity:.85; line-height:1.4; }
-    input { width:100%; padding:12px; border-radius:10px; border:1px solid #2b375a; background:#0b1220; color:#fff; margin-bottom:14px; }
-    button { width:100%; padding:12px; border:none; border-radius:10px; background:#2ea44f; color:#fff; font-weight:700; cursor:pointer; font-size: 15px; }
-    button:hover { filter: brightness(1.05); }
-    .hint { margin-top:10px; font-size:12px; opacity:.75; }
+    body { font-family: Arial, sans-serif; margin: 0; background:#0b1220; color:#e6e8ee; }
+    header { padding: 18px 20px; background:#111a2e; border-bottom:1px solid #223055; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    h1 { margin: 0; font-size: 18px; }
+    .wrap { padding: 18px 20px; display: grid; grid-template-columns: 380px 1fr; gap: 16px; }
+    .card { background:#111a2e; border:1px solid #223055; border-radius: 10px; padding: 14px; }
+    .card h2 { font-size: 14px; margin: 0 0 10px 0; color:#b9c2d6; }
+    label { display:block; font-size: 12px; margin: 10px 0 6px; color:#b9c2d6; }
+    select, input { width: 100%; padding: 10px; border-radius: 8px; border:1px solid #223055; background:#0b1220; color:#e6e8ee; }
+    button { padding: 10px 12px; border-radius: 8px; border:1px solid #2b3d6f; background:#1b2a4d; color:#fff; cursor:pointer; font-weight:700; }
+    button:hover { background:#22335c; }
+    .row { display:flex; gap:10px; }
+    .row > * { flex:1; }
+    .muted { color:#9aa6c3; font-size: 12px; line-height: 1.4; }
+    .status { padding: 10px; border-radius: 8px; background:#0b1220; border:1px solid #223055; font-size: 12px; }
+    pre { margin:0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.35; }
+    .actions { display:flex; gap:10px; flex-wrap: wrap; margin-top: 10px; }
+    .danger { border-color:#7a2b2b; background:#3a1414; }
+    .danger:hover { background:#4a1b1b; }
+    .okpill { font-size:12px; padding:6px 10px; border-radius:999px; border:1px solid #223055; background:#0b1220; color:#b9c2d6; }
     code { background:#0b1220; padding:2px 6px; border-radius:6px; }
+    hr { border:0; border-top:1px solid #223055; margin:14px 0; }
+    @media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
+
+<header>
+  <h1>Slack Chatbot Dashboard (Full MVP)</h1>
+  <span class="okpill" id="pill">Ready</span>
+</header>
+
+<div class="wrap">
+
   <div class="card">
-    <h1>Connect your Slack Workspace</h1>
-    <p>Click below to authorize Slack and connect your workspace to the bot.</p>
+    <h2>0) Backend Base</h2>
+    <p class="muted">
+      Use your API Gateway base URL for now. Later replace with CloudFront/custom domain.
+      Example: <code>https://xxxx.execute-api.ap-south-1.amazonaws.com</code>
+    </p>
 
     <label for="apiBase">Backend Base URL</label>
-    <input
-  id="apiBase"
-  value="https://fcemnui289.execute-api.ap-south-1.amazonaws.com"
-  placeholder="https://fcemnui289.execute-api.ap-south-1.amazonaws.com"
-/>
+    <input id="apiBase" placeholder="https://fcemnui289.execute-api.ap-south-1.amazonaws.com" />
 
-    <button id="connectBtn">Connect Slack</button>
+    <div class="actions">
+      <button onclick="saveApiBase()">Save</button>
+      <button onclick="pingHealth()">Health</button>
+      <button onclick="loadWorkspaces()">Load Workspaces</button>
+    </div>
 
-    
+    <hr>
+
+    <h2>1) Connect</h2>
+    <p class="muted">Connect a Slack workspace via OAuth. After install, the UI will auto-select that workspace.</p>
+
+    <div class="actions">
+      <button onclick="connectSlack()">Connect Slack Workspace</button>
+      <button onclick="location.reload()">Refresh</button>
+    </div>
+
+    <label>Workspace</label>
+    <select id="workspaceSelect" onchange="loadChannels()">
+      <option value="">-- No workspaces loaded --</option>
+    </select>
+
+    <div class="actions">
+      <button onclick="checkToken()">Token Status</button>
+      <button class="danger" onclick="disconnectWorkspace()">Disconnect Workspace</button>
+    </div>
+
+    <hr>
+
+    <h2>2) Channel</h2>
+    <label>Channel</label>
+    <select id="channelSelect">
+      <option value="">-- Load channels first --</option>
+    </select>
+
+    <div class="actions">
+      <button onclick="fetchMessages()">Fetch Messages (latest 50)</button>
+    </div>
+
+    <hr>
+
+    <h2>3) Search & Summarize (next)</h2>
+    <p class="muted">UI ready. We will wire these once backend endpoints exist.</p>
+
+    <label>Keyword</label>
+    <input id="keyword" placeholder="e.g. deployment error" />
+
+    <div class="row">
+      <div>
+        <label>From (YYYY-MM-DD)</label>
+        <input id="fromDate" placeholder="2026-02-01" />
+      </div>
+      <div>
+        <label>To (YYYY-MM-DD)</label>
+        <input id="toDate" placeholder="2026-02-12" />
+      </div>
+    </div>
+
+    <div class="actions">
+      <button onclick="placeholder('Search will be added next')">Search</button>
+      <button onclick="placeholder('Summarize will be added next')">Summarize</button>
+    </div>
   </div>
 
-  <script>
-    document.getElementById("connectBtn").addEventListener("click", () => {
-      const apiBase = document.getElementById("apiBase").value.trim().replace(/\/$/, "");
-      if (!apiBase) {
-        alert("Please enter your Backend Base URL.");
+  <div class="card">
+    <h2>Output</h2>
+    <div class="status" id="status">Ready.</div>
+    <div style="margin-top:10px">
+      <pre id="out">{}</pre>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // ---------- State ----------
+  function normalizeBase(u){ return (u||"").trim().replace(/\/$/,""); }
+  function getApiBase(){
+  const input = normalizeBase(document.getElementById("apiBase").value);
+  const saved = normalizeBase(localStorage.getItem("API_BASE"));
+
+  // default: same domain as UI + /api (CloudFront)
+  const defaultBase = window.location.origin + "/api";
+
+  return input || saved || defaultBase;
+}
+
+  function setApiBase(u){ document.getElementById("apiBase").value = normalizeBase(u); }
+
+  function setStatus(msg){
+    document.getElementById("status").textContent = msg;
+    document.getElementById("pill").textContent = msg.length > 22 ? msg.slice(0,22)+"…" : msg;
+  }
+  function show(obj){ document.getElementById("out").textContent = JSON.stringify(obj, null, 2); }
+
+  async function safeJson(r){
+    const text = await r.text();
+    try { return JSON.parse(text); } catch { return { ok:false, raw:text }; }
+  }
+
+  // ---------- Init ----------
+  (function init(){
+    const saved = localStorage.getItem("API_BASE");
+    if (saved) setApiBase(saved);
+    else setApiBase("https://fcemnui289.execute-api.ap-south-1.amazonaws.com");
+
+    // If redirected back with team_id or team, remember it and auto-select later.
+    const params = new URLSearchParams(window.location.search);
+    const team = params.get("team_id") || params.get("team") || "";
+    if (team) {
+      localStorage.setItem("LAST_TEAM_ID", team);
+      setStatus("OAuth complete: " + team);
+      // clean url
+      const url = new URL(window.location.href);
+      url.searchParams.delete("team_id");
+      url.searchParams.delete("team");
+      window.history.replaceState({}, "", url.toString());
+    } else {
+      setStatus("Ready.");
+    }
+
+    // auto load workspaces on open
+    loadWorkspaces().catch(()=>{});
+  })();
+
+  // ---------- Actions ----------
+  function saveApiBase(){
+    const base = normalizeBase(document.getElementById("apiBase").value);
+    if(!base){ alert("Enter Backend Base URL"); return; }
+    localStorage.setItem("API_BASE", base);
+    setStatus("Saved API base");
+  }
+
+  async function pingHealth(){
+    try{
+      const base = getApiBase();
+      setStatus("Calling /health...");
+      const r = await fetch(base + "/health");
+      const data = await safeJson(r);
+      show(data);
+      setStatus("Health OK");
+    }catch(e){
+      show({ ok:false, error:String(e) });
+      setStatus("Health failed");
+    }
+  }
+
+  function connectSlack(){
+    const base = getApiBase();
+    localStorage.setItem("API_BASE", base);
+    setStatus("Opening Slack OAuth...");
+    window.open(base + "/install", "_blank", "noopener,noreferrer");
+  }
+
+  async function loadWorkspaces(){
+    try{
+      const base = getApiBase();
+      setStatus("Loading workspaces...");
+      const r = await fetch(base + "/workspaces");
+      const data = await safeJson(r);
+      show(data);
+
+      const sel = document.getElementById("workspaceSelect");
+      sel.innerHTML = "";
+
+      const list = (data.workspaces || []);
+      if (!data.ok) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "-- failed to load workspaces --";
+        sel.appendChild(opt);
+        setStatus("Workspaces load failed");
         return;
       }
-      // Redirect user to backend OAuth start endpoint
-      window.location.href = `${apiBase}/install`;
-    });
-  </script>
+
+      if (list.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "-- none connected yet --";
+        sel.appendChild(opt);
+        setStatus("No workspaces connected");
+        return;
+      }
+
+      const last = localStorage.getItem("LAST_TEAM_ID") || "";
+
+      list.forEach(w => {
+        const opt = document.createElement("option");
+        opt.value = w.team_id;
+        opt.textContent = w.team_id + (w.team_name ? (" • " + w.team_name) : "");
+        sel.appendChild(opt);
+      });
+
+      // auto-select last team if exists
+      if (last && list.some(w => w.team_id === last)) {
+        sel.value = last;
+        await loadChannels();
+      }
+
+      setStatus("Workspaces loaded");
+    }catch(e){
+      show({ ok:false, error:String(e) });
+      setStatus("Workspaces load failed");
+    }
+  }
+
+  async function checkToken(){
+    try{
+      const base = getApiBase();
+      const team_id = document.getElementById("workspaceSelect").value;
+      if(!team_id){ setStatus("Select a workspace first"); return; }
+
+      setStatus("Checking token...");
+      const r = await fetch(base + "/token/status?team_id=" + encodeURIComponent(team_id));
+      const data = await safeJson(r);
+      show(data);
+
+      if (data.ok && data.has_token) setStatus("✅ Token OK");
+      else setStatus("⚠️ Token missing");
+    }catch(e){
+      show({ ok:false, error:String(e) });
+      setStatus("Token check failed");
+    }
+  }
+
+  async function loadChannels(){
+    try{
+      const base = getApiBase();
+      const team_id = document.getElementById("workspaceSelect").value;
+      if(!team_id) return;
+
+      setStatus("Loading channels...");
+      const r = await fetch(base + "/channels?team_id=" + encodeURIComponent(team_id));
+      const data = await safeJson(r);
+      show(data);
+
+      const sel = document.getElementById("channelSelect");
+      sel.innerHTML = "";
+
+      if (!data.ok) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "-- failed to load channels --";
+        sel.appendChild(opt);
+        setStatus("Channels load failed");
+        return;
+      }
+
+      const channels = data.channels || [];
+      if (channels.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "-- no channels returned --";
+        sel.appendChild(opt);
+        setStatus("No channels");
+        return;
+      }
+
+      channels.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = c.name + " (" + c.id + ")";
+        sel.appendChild(opt);
+      });
+
+      setStatus("Channels loaded");
+    }catch(e){
+      show({ ok:false, error:String(e) });
+      setStatus("Channels load failed");
+    }
+  }
+
+  async function fetchMessages(){
+    try{
+      const base = getApiBase();
+      const team_id = document.getElementById("workspaceSelect").value;
+      const channel_id = document.getElementById("channelSelect").value;
+      if(!team_id || !channel_id){ setStatus("Select workspace + channel first"); return; }
+
+      setStatus("Fetching messages...");
+      const url = base + "/fetch-messages?team_id=" + encodeURIComponent(team_id) + "&channel_id=" + encodeURIComponent(channel_id);
+      const r = await fetch(url);
+      const data = await safeJson(r);
+      show(data);
+
+      if (data.ok) setStatus("Messages fetched");
+      else setStatus("Fetch failed");
+    }catch(e){
+      show({ ok:false, error:String(e) });
+      setStatus("Fetch failed");
+    }
+  }
+
+  async function disconnectWorkspace(){
+    try{
+      const base = getApiBase();
+      const team_id = document.getElementById("workspaceSelect").value;
+      if(!team_id) return;
+
+      if(!confirm("Disconnect this workspace? This will revoke the token and delete the secret.")) return;
+
+      setStatus("Disconnecting...");
+      const r = await fetch(base + "/workspaces/" + encodeURIComponent(team_id), { method:"DELETE" });
+      const data = await safeJson(r);
+      show(data);
+
+      setStatus("Disconnected");
+      await loadWorkspaces();
+    }catch(e){
+      show({ ok:false, error:String(e) });
+      setStatus("Disconnect failed");
+    }
+  }
+
+  function placeholder(msg){ setStatus(msg); }
+</script>
+
 </body>
 </html>
