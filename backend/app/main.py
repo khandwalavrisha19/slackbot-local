@@ -122,6 +122,23 @@ def health():
         "frontend_path_exists": FRONTEND_PATH.exists(),
     }
 
+# @app.get("/install")
+# def install():
+#     if not CLIENT_ID or not CLIENT_SECRET or not REDIRECT_URI:
+#         return HTMLResponse(
+#             "<h3>Missing ENV</h3><p>Set SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_REDIRECT_URI</p>",
+#             status_code=500
+#         )
+
+#     url = (
+#         "https://slack.com/oauth/v2/authorize"
+#         f"?client_id={CLIENT_ID}"
+#         f"&scope={SLACK_SCOPES}"
+#         f"&redirect_uri={REDIRECT_URI}"
+#     )
+#     return RedirectResponse(url)
+from urllib.parse import urlencode
+
 @app.get("/install")
 def install():
     if not CLIENT_ID or not CLIENT_SECRET or not REDIRECT_URI:
@@ -130,20 +147,23 @@ def install():
             status_code=500
         )
 
-    url = (
-        "https://slack.com/oauth/v2/authorize"
-        f"?client_id={CLIENT_ID}"
-        f"&scope={SLACK_SCOPES}"
-        f"&redirect_uri={REDIRECT_URI}"
-    )
+    params = {
+    "client_id": CLIENT_ID,
+    "scope": SLACK_SCOPES,
+    "redirect_uri": REDIRECT_URI,
+    "state": "slackbot_mvp"
+    }
+
+    url = "https://slack.com/oauth/v2/authorize?" + urlencode(params)
     return RedirectResponse(url)
 
 @app.get("/oauth/callback")
-def oauth_callback(code: str | None = None, error: str | None = None):
+def oauth_callback(code: str | None = None, error: str | None = None, state: str | None = None):
     if error:
         return HTMLResponse(f"<h3>Slack install failed</h3><p>{error}</p>", status_code=400)
     if not code:
         return HTMLResponse("<h3>Slack install failed</h3><p>Missing code</p>", status_code=400)
+        
 
     # Exchange code for token
     r = requests.post(
@@ -160,9 +180,11 @@ def oauth_callback(code: str | None = None, error: str | None = None):
 
     if not data.get("ok"):
         return HTMLResponse(
-            f"<h3>Slack install failed</h3><p>{data.get('error','unknown_error')}</p>",
+            "<h3>Slack install failed</h3>"
+            f"<pre>{json.dumps(data, indent=2)}</pre>",
             status_code=400,
         )
+
 
     team = data.get("team") or {}
     team_id = team.get("id")
@@ -175,7 +197,8 @@ def oauth_callback(code: str | None = None, error: str | None = None):
     if not team_id or not bot_token:
         return HTMLResponse("<h3>Install failed</h3><p>Missing team_id or token</p>", status_code=500)
 
-    upsert_secret(
+    try:
+        upsert_secret(
         secret_name(team_id),
         {
             "team_id": team_id,
@@ -185,9 +208,19 @@ def oauth_callback(code: str | None = None, error: str | None = None):
             "scope": scope,
         },
     )
+    except Exception as e:
+        return HTMLResponse(
+            "<h3>Install failed while saving token</h3>"
+            f"<pre>{str(e)}</pre>",
+            status_code=500,
+        )
 
-    UI_BASE = os.getenv("UI_BASE_URL", "https://fcemnui289.execute-api.ap-south-1.amazonaws.com")
+    #https://fcemnui289.execute-api.ap-south-1.amazonaws.com
+
+    UI_BASE = os.getenv("UI_BASE_URL", "https://d2bl75rwuudy2k.cloudfront.net")
+    UI_BASE = UI_BASE.rstrip("/")
     return RedirectResponse(url=f"{UI_BASE}/?team_id={team_id}", status_code=302)
+
 
 @app.get("/token/status")
 def token_status(team_id: str):
@@ -319,6 +352,43 @@ def fetch_messages(team_id: str, channel_id: str):
 
     return {"ok": True, "messages": messages}
 
+# ---------------------- CloudFront "/api/*" ALIAS ROUTES ----------------------
+# Your CloudFront routes use /api/*, but your app currently exposes non-/api routes.
+# These aliases keep old URLs working AND make CloudFront /api URLs work.
+
+@app.get("/api/health")
+def api_health():
+    return health()
+
+@app.get("/api/install")
+def api_install():
+    return install()
+
+
+@app.get("/api/oauth/callback")
+def api_oauth_callback(code: str | None = None, error: str | None = None, state: str | None = None):
+    return oauth_callback(code=code, error=error, state=state)
+
+
+@app.get("/api/token/status")
+def api_token_status(team_id: str):
+    return token_status(team_id=team_id)
+
+@app.get("/api/workspaces")
+def api_workspaces():
+    return list_workspaces()
+
+@app.delete("/api/workspaces/{team_id}")
+def api_disconnect_workspace(team_id: str):
+    return disconnect_workspace(team_id=team_id)
+
+@app.get("/api/channels")
+def api_channels(team_id: str):
+    return list_channels(team_id=team_id)
+
+@app.get("/api/fetch-messages")
+def api_fetch_messages(team_id: str, channel_id: str):
+    return fetch_messages(team_id=team_id, channel_id=channel_id)
 
 # ---------------------- Lambda Handler ----------------------
 handler = Mangum(app)
