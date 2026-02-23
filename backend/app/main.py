@@ -21,22 +21,25 @@ import os
 import json
 from typing import Optional
 from pathlib import Path
-
 import requests
 import boto3
 from botocore.exceptions import ClientError
-
+import time
+import hmac
+import hashlib
+from datetime import datetime
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
-
+from boto3.dynamodb.conditions import Key
 from mangum import Mangum
 
 
 # ---------------------- Env ----------------------
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 SECRET_PREFIX = os.getenv("SECRET_PREFIX", "slackbot")
-
 CLIENT_ID = os.getenv("SLACK_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI")  # MUST match Slack app redirect URL exactly
@@ -66,6 +69,12 @@ app.add_middleware(
 
 # ---------------------- AWS Clients ----------------------
 secrets = boto3.client("secretsmanager", region_name=AWS_REGION)
+dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+DDB_TABLE = os.getenv("DDB_TABLE", "SlackMessagesV2")
+ddb_table = dynamodb.Table(DDB_TABLE)
+
+SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
+
 
 
 # ---------------------- Helpers ----------------------
@@ -95,6 +104,25 @@ def mask_token(token: str) -> str:
     if len(token) <= 10:
         return token[:2] + "..." + token[-2:]
     return token[:4] + "..." + token[-4:]
+
+def verify_slack_signature(signing_secret: str, timestamp: str, body: bytes, signature: str) -> bool:
+    if not signing_secret or not timestamp or not signature:
+        return False
+
+    # Prevent replay attacks (5 minutes)
+    try:
+        ts = int(timestamp)
+    except ValueError:
+        return False
+
+    if abs(int(time.time()) - ts) > 60 * 5:
+        return False
+
+    base = b"v0:" + timestamp.encode("utf-8") + b":" + body
+    digest = hmac.new(signing_secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
+    expected = "v0=" + digest
+
+    return hmac.compare_digest(expected, signature)
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]   # goes to "SLACK BOT" root
@@ -352,6 +380,246 @@ def fetch_messages(team_id: str, channel_id: str):
 
     return {"ok": True, "messages": messages}
 
+@app.post("/slack/events")
+async def slack_events(request: Request):
+    raw_body = await request.body()
+    payload = json.loads(raw_body.decode("utf-8"))
+
+    # FIRST handle URL verification WITHOUT signature check
+    if payload.get("type") == "url_verification":
+        return JSONResponse({"challenge": payload.get("challenge")})
+
+    # Now verify signature for real events
+    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+    signature = request.headers.get("X-Slack-Signature", "")
+
+    if not verify_slack_signature(SLACK_SIGNING_SECRET, timestamp, raw_body, signature):
+        return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=401)
+
+    payload = await request.json()
+
+    # Slack URL verification handshake
+    if payload.get("type") == "url_verification":
+        return JSONResponse({"challenge": payload.get("challenge")})
+
+    if payload.get("type") != "event_callback":
+        return JSONResponse({"ok": True})
+
+    event = payload.get("event") or {}
+
+    # We only care about message events
+    if event.get("type") != "message":
+        return JSONResponse({"ok": True})
+
+    # Ignore bot messages and edits/deletes
+    if event.get("bot_id"):
+        return JSONResponse({"ok": True})
+    if event.get("subtype") in {"message_changed", "message_deleted"}:
+        return JSONResponse({"ok": True})
+
+    team_id = payload.get("team_id")
+    channel_id = event.get("channel")
+    ts_msg = event.get("ts")
+    text = event.get("text", "")
+    user_id = event.get("user")
+
+    if not team_id or not channel_id or not ts_msg:
+        return JSONResponse({"ok": True})
+
+    item = {
+        # V2 key design
+        "pk": f"{team_id}#{channel_id}",
+        "sk": str(ts_msg),
+
+        "team_id": team_id,
+        "channel_id": channel_id,
+        "ts": str(ts_msg),
+        "user_id": user_id,
+        "text": text,
+
+        "thread_ts": event.get("thread_ts"),
+        "subtype": event.get("subtype"),
+        "type": event.get("type"),
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+    # Slack retries deliveries; avoid duplicates
+    try:
+        ddb_table.put_item(
+            Item=item,
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)"
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+
+    return JSONResponse({"ok": True})
+
+@app.get("/db-messages")
+def db_messages(team_id: str, channel_id: str, limit: int = 50):
+    try:
+        pk = f"{team_id}#{channel_id}"
+
+        resp = ddb_table.query(
+            KeyConditionExpression=Key("pk").eq(pk),
+            Limit=limit,
+            ScanIndexForward=False  # newest first
+        )
+
+        return {
+            "ok": True,
+            "source": "dynamodb",
+            "count": resp.get("Count", 0),
+            "items": resp.get("Items", [])
+        }
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e)
+        }
+
+@app.post("/join-channel")
+def join_channel(team_id: str, channel_id: str):
+    sec = read_secret(secret_name(team_id))
+    if not sec or "_error" in sec:
+        return {"ok": False, "message": "Secret not found", "detail": sec}
+
+    bot_token = sec.get("bot_token")
+    if not bot_token:
+        return {"ok": False, "message": "bot_token missing"}
+
+    data = requests.post(
+        "https://slack.com/api/conversations.join",
+        headers={"Authorization": f"Bearer {bot_token}"},
+        data={"channel": channel_id},
+        timeout=20,
+    ).json()
+
+    # already_in_channel is fine
+    if not data.get("ok") and data.get("error") != "already_in_channel":
+        return {"ok": False, "slack_error": data}
+
+    return {"ok": True, "joined": True, "channel_id": channel_id}
+
+@app.post("/join-all-public")
+def join_all_public(team_id: str):
+    sec = read_secret(secret_name(team_id))
+    if not sec or "_error" in sec:
+        return {"ok": False, "message": "Secret not found", "detail": sec}
+
+    bot_token = sec.get("bot_token")
+    if not bot_token:
+        return {"ok": False, "message": "bot_token missing"}
+
+    joined, failed = [], []
+    cursor = None
+
+    while True:
+        params = {"limit": 200, "types": "public_channel", "exclude_archived": "true"}
+        if cursor:
+            params["cursor"] = cursor
+
+        lst = requests.get(
+            "https://slack.com/api/conversations.list",
+            headers={"Authorization": f"Bearer {bot_token}"},
+            params=params,
+            timeout=20,
+        ).json()
+
+        if not lst.get("ok"):
+            return {"ok": False, "slack_error": lst}
+
+        for ch in lst.get("channels", []):
+            ch_id = ch["id"]
+            j = requests.post(
+                "https://slack.com/api/conversations.join",
+                headers={"Authorization": f"Bearer {bot_token}"},
+                data={"channel": ch_id},
+                timeout=20,
+            ).json()
+
+            if j.get("ok") or j.get("error") == "already_in_channel":
+                joined.append(ch_id)
+            else:
+                failed.append({"channel": ch_id, "error": j.get("error")})
+
+        cursor = (lst.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            break
+
+    return {"ok": True, "joined_count": len(joined), "failed_count": len(failed), "failed": failed}
+
+
+@app.post("/backfill-channel")
+def backfill_channel(team_id: str, channel_id: str, limit: int = 200, cursor: str | None = None):
+    sec = read_secret(secret_name(team_id))
+    if not sec or "_error" in sec:
+        return {"ok": False, "message": "Secret not found", "detail": sec}
+
+    bot_token = sec.get("bot_token")
+    if not bot_token:
+        return {"ok": False, "message": "bot_token missing"}
+
+    params = {"channel": channel_id, "limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+
+    data = requests.get(
+        "https://slack.com/api/conversations.history",
+        headers={"Authorization": f"Bearer {bot_token}"},
+        params=params,
+        timeout=20,
+    ).json()
+
+    if not data.get("ok"):
+        return {"ok": False, "slack_error": data}
+
+    msgs = data.get("messages", []) or []
+    pk = f"{team_id}#{channel_id}"
+
+    stored = 0
+    for m in msgs:
+        ts_msg = str(m.get("ts"))
+        if not ts_msg:
+            continue
+
+        item = {
+            "pk": pk,
+            "sk": ts_msg,
+            "team_id": team_id,
+            "channel_id": channel_id,
+            "ts": ts_msg,
+            "user_id": m.get("user"),
+            "text": m.get("text", ""),
+            "thread_ts": m.get("thread_ts"),
+            "reply_count": m.get("reply_count", 0),
+            "subtype": m.get("subtype"),
+            "type": m.get("type"),
+            "fetched_at": datetime.utcnow().isoformat() + "Z",
+        }
+
+        try:
+            ddb_table.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)"
+            )
+            stored += 1
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+
+    next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+
+    return {
+        "ok": True,
+        "channel_id": channel_id,
+        "fetched": len(msgs),
+        "stored_new": stored,
+        "next_cursor": next_cursor,
+        "has_more": bool(next_cursor),
+    }
+
 # ---------------------- CloudFront "/api/*" ALIAS ROUTES ----------------------
 # Your CloudFront routes use /api/*, but your app currently exposes non-/api routes.
 # These aliases keep old URLs working AND make CloudFront /api URLs work.
@@ -389,6 +657,26 @@ def api_channels(team_id: str):
 @app.get("/api/fetch-messages")
 def api_fetch_messages(team_id: str, channel_id: str):
     return fetch_messages(team_id=team_id, channel_id=channel_id)
+
+@app.post("/api/slack/events")
+async def api_slack_events(request: Request):
+    return await slack_events(request)
+
+@app.get("/api/db-messages")
+def api_db_messages(team_id: str, channel_id: str, limit: int = 50):
+    return db_messages(team_id=team_id, channel_id=channel_id, limit=limit)
+
+@app.post("/api/join-channel")
+def api_join_channel(team_id: str, channel_id: str):
+    return join_channel(team_id=team_id, channel_id=channel_id)
+
+@app.post("/api/join-all-public")
+def api_join_all_public(team_id: str):
+    return join_all_public(team_id=team_id)
+
+@app.post("/api/backfill-channel")
+def api_backfill_channel(team_id: str, channel_id: str, limit: int = 200, cursor: str | None = None):
+    return backfill_channel(team_id=team_id, channel_id=channel_id, limit=limit, cursor=cursor)
 
 # ---------------------- Lambda Handler ----------------------
 handler = Mangum(app)
