@@ -419,27 +419,45 @@
       const r = await fetch(getApiBase() + "/workspaces");
       const data = await safeJson(r);
       show(data);
+
       const sel = document.getElementById("workspaceSelect");
+      const chSel = document.getElementById("channelSelect");
       sel.innerHTML = "";
+
       const list = data.workspaces || [];
       if (!data.ok) {
         sel.innerHTML = '<option value="">— failed to load workspaces —</option>';
         setStatus("Workspaces load failed", "err");
         return;
       }
+
       if (list.length === 0) {
+        localStorage.removeItem("LAST_TEAM_ID");
         sel.innerHTML = '<option value="">— none connected yet —</option>';
+        chSel.innerHTML = '<option value="">— Load channels first —</option>';
         setStatus("No workspaces connected");
         return;
       }
+
       const last = localStorage.getItem("LAST_TEAM_ID") || "";
+      let foundLast = false;
+
       list.forEach(w => {
         const opt = document.createElement("option");
         opt.value = w.team_id;
         opt.textContent = w.team_id + (w.team_name ? (" • " + w.team_name) : "");
-        if (w.team_id === last) opt.selected = true;
+        if (w.team_id === last) {
+          opt.selected = true;
+          foundLast = true;
+        }
         sel.appendChild(opt);
       });
+
+      if (last && !foundLast) {
+        localStorage.removeItem("LAST_TEAM_ID");
+        sel.selectedIndex = 0;
+      }
+
       setStatus("Workspaces loaded", "ok");
       if (sel.value) loadChannels();
     }catch(e){
@@ -584,14 +602,43 @@
 
   async function disconnectWorkspace(){
     try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      if(!team_id) return;
+      const sel = document.getElementById("workspaceSelect");
+      const chSel = document.getElementById("channelSelect");
+      const team_id = sel.value;
+
+      if(!team_id){
+        setStatus("Select a workspace first", "warn");
+        return;
+      }
+
       if(!confirm("Disconnect this workspace? This will revoke the token and delete the secret.")) return;
+
       setStatus("Disconnecting…");
-      const r = await fetch(getApiBase() + "/workspaces/" + encodeURIComponent(team_id), { method:"DELETE" });
+
+      const r = await fetch(getApiBase() + "/workspaces/" + encodeURIComponent(team_id), {
+        method: "DELETE"
+      });
       const data = await safeJson(r);
       show(data);
+
+      if (!data.ok) {
+        setStatus("Disconnect failed", "err");
+        return;
+      }
+
+      // remove remembered workspace if same one was deleted
+      const last = localStorage.getItem("LAST_TEAM_ID");
+      if (last === team_id) {
+        localStorage.removeItem("LAST_TEAM_ID");
+      }
+
+      // immediately reset UI
+      sel.innerHTML = '<option value="">— none connected yet —</option>';
+      chSel.innerHTML = '<option value="">— Load channels first —</option>';
+
       setStatus("Disconnected", "ok");
+
+      // reload latest list from backend
       await loadWorkspaces();
     }catch(e){
       show({ ok:false, error:String(e) });

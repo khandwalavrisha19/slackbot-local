@@ -504,11 +504,24 @@ def list_workspaces():
     for page in secrets.get_paginator("list_secrets").paginate():
         for s in page.get("SecretList", []):
             name = s.get("Name", "")
+
+            # skip secrets already scheduled/deleted
+            if s.get("DeletedDate"):
+                continue
+
             if name.startswith(f"{SECRET_PREFIX}/"):
                 team_id = name.split(f"{SECRET_PREFIX}/")[-1]
-                sec     = read_secret(name)
-                workspaces.append({"team_id": team_id,
-                                   "team_name": sec.get("team_name") if sec and "_error" not in sec else None})
+                sec = read_secret(name)
+
+                # skip unreadable/deleted secrets
+                if not sec or "_error" in sec:
+                    continue
+
+                workspaces.append({
+                    "team_id": team_id,
+                    "team_name": sec.get("team_name")
+                })
+
     return {"ok": True, "workspaces": workspaces}
 
 @app.delete("/workspaces/{team_id}")
