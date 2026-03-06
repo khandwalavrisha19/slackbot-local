@@ -1,0 +1,174 @@
+name: Deploy Slackbot
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: slackbot-api
+  TEMPLATE_FILE: infra/template.yml
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set environment variables
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
+            echo "ENV_NAME=dev" >> "$GITHUB_ENV"
+            echo "STACK_NAME=dev-slackbot-stack" >> "$GITHUB_ENV"
+            echo "ROLE_ARN=${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}" >> "$GITHUB_ENV"
+            echo "SLACK_CLIENT_ID=${{ secrets.DEV_SLACK_CLIENT_ID }}" >> "$GITHUB_ENV"
+            echo "SLACK_CLIENT_SECRET=${{ secrets.DEV_SLACK_CLIENT_SECRET }}" >> "$GITHUB_ENV"
+            echo "SLACK_SIGNING_SECRET=${{ secrets.DEV_SLACK_SIGNING_SECRET }}" >> "$GITHUB_ENV"
+            echo "GROQ_API_KEY=${{ secrets.DEV_GROQ_API_KEY }}" >> "$GITHUB_ENV"
+            echo "API_DOMAIN=${{ secrets.DEV_API_DOMAIN }}" >> "$GITHUB_ENV"
+          elif [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "ENV_NAME=prod" >> "$GITHUB_ENV"
+            echo "STACK_NAME=prod-slackbot-stack" >> "$GITHUB_ENV"
+            echo "ROLE_ARN=${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}" >> "$GITHUB_ENV"
+            echo "SLACK_CLIENT_ID=${{ secrets.PROD_SLACK_CLIENT_ID }}" >> "$GITHUB_ENV"
+            echo "SLACK_CLIENT_SECRET=${{ secrets.PROD_SLACK_CLIENT_SECRET }}" >> "$GITHUB_ENV"
+            echo "SLACK_SIGNING_SECRET=${{ secrets.PROD_SLACK_SIGNING_SECRET }}" >> "$GITHUB_ENV"
+            echo "GROQ_API_KEY=${{ secrets.PROD_GROQ_API_KEY }}" >> "$GITHUB_ENV"
+            echo "API_DOMAIN=${{ secrets.PROD_API_DOMAIN }}" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported branch: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          echo "IMAGE_TAG=${ENV_NAME}-${SHORT_SHA}" >> "$GITHUB_ENV"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify caller identity
+        run: aws sts get-caller-identity
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository exists
+        shell: bash
+        run: |
+          aws ecr describe-repositories \
+            --repository-names "$ECR_REPOSITORY" \
+            --region "$AWS_REGION" >/dev/null 2>&1 || \
+          aws ecr create-repository \
+            --repository-name "$ECR_REPOSITORY" \
+            --region "$AWS_REGION"
+
+      - name: Build and push Docker image
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          echo "IMAGE_URI=${IMAGE_URI}" >> "$GITHUB_ENV"
+
+          docker build -t "$IMAGE_URI" ./backend
+          docker push "$IMAGE_URI"
+
+          echo "Pushed image: $IMAGE_URI"
+
+      - name: Get current FrontendDomain if stack exists
+        shell: bash
+        run: |
+          FRONTEND_DOMAIN=""
+          if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            FRONTEND_DOMAIN="$(aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --region "$AWS_REGION" \
+              --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomain'].OutputValue" \
+              --output text 2>/dev/null || echo "")"
+          fi
+
+          echo "FRONTEND_DOMAIN=$FRONTEND_DOMAIN" >> "$GITHUB_ENV"
+          echo "Detected FrontendDomain: $FRONTEND_DOMAIN"
+
+      - name: Deploy CloudFormation stack
+        shell: bash
+        run: |
+          aws cloudformation deploy \
+            --stack-name "$STACK_NAME" \
+            --template-file "$TEMPLATE_FILE" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region "$AWS_REGION" \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              Env="$ENV_NAME" \
+              ImageTag="$IMAGE_TAG" \
+              ApiDomain="$API_DOMAIN" \
+              FrontendDomain="$FRONTEND_DOMAIN" \
+              SlackClientId="$SLACK_CLIENT_ID" \
+              SlackClientSecret="$SLACK_CLIENT_SECRET" \
+              SlackSigningSecret="$SLACK_SIGNING_SECRET" \
+              GroqApiKey="$GROQ_API_KEY"
+
+      - name: Read stack outputs
+        shell: bash
+        run: |
+          FRONTEND_BUCKET="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" \
+            --output text)"
+
+          CLOUDFRONT_DISTRIBUTION_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" \
+            --output text)"
+
+          CLOUDFRONT_DOMAIN="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomain'].OutputValue" \
+            --output text)"
+
+          echo "FRONTEND_BUCKET=$FRONTEND_BUCKET" >> "$GITHUB_ENV"
+          echo "CLOUDFRONT_DISTRIBUTION_ID=$CLOUDFRONT_DISTRIBUTION_ID" >> "$GITHUB_ENV"
+          echo "CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN" >> "$GITHUB_ENV"
+
+      - name: Upload frontend to S3
+        shell: bash
+        run: |
+          test -f frontend/index.html || { echo "frontend/index.html not found"; exit 1; }
+
+          aws s3 cp frontend/index.html "s3://$FRONTEND_BUCKET/index.html" \
+            --region "$AWS_REGION" \
+            --cache-control "public,max-age=0,must-revalidate" \
+            --content-type "text/html"
+
+      - name: Invalidate CloudFront cache
+        shell: bash
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/*"
+
+      - name: Deployment summary
+        shell: bash
+        run: |
+          echo "Deployment complete"
+          echo "Environment: $ENV_NAME"
+          echo "Stack: $STACK_NAME"
+          echo "Image tag: $IMAGE_TAG"
+          echo "Frontend URL: https://$CLOUDFRONT_DOMAIN"

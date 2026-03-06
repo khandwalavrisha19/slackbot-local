@@ -1,0 +1,256 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: DEV/PROD Slackbot Infra (Lambda + DynamoDB + S3 + CloudFront)
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  ImageTag:
+    Type: String
+    Description: "ECR image tag e.g. dev-a571a8b"
+
+  ApiDomain:
+    Type: String
+    Description: "API Gateway domain like abc.execute-api.ap-south-1.amazonaws.com"
+
+  FrontendDomain:
+    Type: String
+    Description: "CloudFront domain (leave blank on first deploy, update after)"
+    Default: ""
+
+  SlackClientId:
+    Type: String
+
+  SlackClientSecret:
+    Type: String
+    NoEcho: true
+
+  SlackSigningSecret:
+    Type: String
+    NoEcho: true
+
+  GroqApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+
+
+Resources:
+
+  # -------------------------
+  # DYNAMODB TABLE
+  # -------------------------
+  
+  MessagesTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      TableName: !Sub "${Env}-SlackMessagesV2"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  # -------------------------
+  # IAM ROLE FOR LAMBDA
+  # -------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Env}-slackbot-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub "${Env}-slackbot-ecr-read"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchCheckLayerAvailability
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/slackbot-api"
+
+        - PolicyName: !Sub "${Env}-slackbot-dynamodb"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                Resource: !GetAtt MessagesTable.Arn
+
+        - PolicyName: !Sub "${Env}-slackbot-secrets"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:ListSecrets
+                Resource: "*"
+
+  # -------------------------
+  # LAMBDA FUNCTION
+  # -------------------------
+  SlackbotFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${Env}-slackbot-api"
+      PackageType: Image
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 1024
+      Code:
+        ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/slackbot-api:${ImageTag}"
+      Environment:
+        Variables:
+          SECRET_PREFIX: !If [IsProd, "prod-slackbot", "slackbot"]
+          DDB_TABLE: !Ref MessagesTable
+          UI_BASE_URL: !Sub "https://${FrontendDomain}"
+          SLACK_CLIENT_ID: !Ref SlackClientId
+          SLACK_CLIENT_SECRET: !Ref SlackClientSecret
+          SLACK_SIGNING_SECRET: !Ref SlackSigningSecret
+          SLACK_REDIRECT_URI: !Sub "https://${FrontendDomain}/api/oauth/callback"
+          GROQ_API_KEY: !Ref GroqApiKey
+          SLACK_SCOPES: "channels:read,groups:read,channels:history,groups:history,users:read,chat:write,channels:join"
+
+  # -------------------------
+  # S3 BUCKET
+  # -------------------------
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Env}-slackbot-frontend-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # -------------------------
+  # CLOUDFRONT ORIGIN ACCESS CONTROL
+  # -------------------------
+  FrontendOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${Env}-slackbot-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # -------------------------
+  # CLOUDFRONT DISTRIBUTION
+  # -------------------------
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+
+        Origins:
+          - Id: s3-origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !Ref FrontendOAC
+
+          - Id: apigw-origin
+            DomainName: !Ref ApiDomain
+            OriginPath: ""
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+
+        DefaultCacheBehavior:
+          TargetOriginId: s3-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+
+        # Route API endpoints to API Gateway
+        CacheBehaviors:
+          # /api/* routes
+          - PathPattern: "/api/*"
+            TargetOriginId: apigw-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            ForwardedValues:
+              QueryString: true
+              Headers:
+                - Authorization
+                - Content-Type
+                - Origin
+              Cookies:
+                Forward: all
+
+         
+  # BUCKET POLICY
+  # -------------------------
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}"
+
+Conditions:
+  IsProd: !Equals [!Ref Env, "prod"]
+
+Outputs:
+  LambdaName:
+    Value: !Ref SlackbotFunction
+
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+
+  CloudFrontDistributionId:
+    Value: !Ref FrontendDistribution
+
+  CloudFrontDomain:
+    Value: !GetAtt FrontendDistribution.DomainName
+
+  DynamoDBTableName:
+    Value: !Ref MessagesTable
