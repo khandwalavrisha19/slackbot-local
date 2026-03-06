@@ -73,7 +73,7 @@ app.add_middleware(
 # ---------------------- AWS Clients ----------------------
 secrets   = boto3.client("secretsmanager", region_name=AWS_REGION)
 dynamodb  = boto3.resource("dynamodb", region_name=AWS_REGION)
-DDB_TABLE = os.getenv("DDB_TABLE", "SlackMessagesV2")
+DDB_TABLE = os.getenv("DDB_TABLE", "")
 ddb_table = dynamodb.Table(DDB_TABLE)
 
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
