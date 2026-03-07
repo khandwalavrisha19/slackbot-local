@@ -45,14 +45,14 @@ logger = logging.getLogger(__name__)
 
 # ---------------------- Env ----------------------
 AWS_REGION     = os.getenv("AWS_REGION", "ap-south-1")
-SECRET_PREFIX  = os.getenv("SECRET_PREFIX", "slackbot")
+SECRET_PREFIX  = os.getenv("SECRET_PREFIX", "slackbot").strip()
 CLIENT_ID      = os.getenv("SLACK_CLIENT_ID")
 CLIENT_SECRET  = os.getenv("SLACK_CLIENT_SECRET")
 REDIRECT_URI   = os.getenv("SLACK_REDIRECT_URI")
 
 SLACK_SCOPES = os.getenv(
     "SLACK_SCOPES",
-    "channels:history,chat:write,users:read,groups:history,channels:read,groups:read,channels:join"
+    "scope: channels:history,chat:write,users:read,groups:history,channels:read,groups:read,channels:join"
 )
 
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
@@ -459,57 +459,44 @@ def install():
 
 @app.get("/oauth/callback")
 def oauth_callback(code: str | None = None, error: str | None = None, state: str | None = None):
-    if error:
+    def popup_html(payload: dict, status_code: int = 200):
+        msg = json.dumps(payload)
         return HTMLResponse(f"""
         <html><body>
         <script>
-          if (window.opener) {{
-            window.opener.postMessage({{"type":"slack_oauth_error","error":{json.dumps(error)}}}, "*");
-          }}
+          try {{
+            if (window.opener) {{
+              window.opener.postMessage({msg}, "*");
+            }}
+          }} catch (e) {{}}
           window.close();
         </script>
-        <p>Slack install failed. You can close this window.</p>
+        <p>You can close this window.</p>
         </body></html>
-        """, status_code=400)
+        """, status_code=status_code)
 
+    if error:
+        return popup_html({"type": "slack_oauth_error", "error": error}, 400)
     if not code:
-        return HTMLResponse("""
-        <html><body>
-        <script>
-          if (window.opener) {
-            window.opener.postMessage({"type":"slack_oauth_error","error":"missing_code"}, "*");
-          }
-          window.close();
-        </script>
-        <p>Missing code. You can close this window.</p>
-        </body></html>
-        """, status_code=400)
+        return popup_html({"type": "slack_oauth_error", "error": "missing_code"}, 400)
 
-    r = requests.post(
-        "https://slack.com/api/oauth.v2.access",
-        data={
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "code": code,
-            "redirect_uri": REDIRECT_URI
-        },
-        timeout=20
-    )
-    data = r.json()
+    try:
+        r = requests.post(
+            "https://slack.com/api/oauth.v2.access",
+            data={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": REDIRECT_URI,
+            },
+            timeout=20,
+        )
+        data = r.json()
+    except Exception as e:
+        return popup_html({"type": "slack_oauth_error", "error": f"oauth_exchange_failed: {e}"}, 500)
 
     if not data.get("ok"):
-        err_json = json.dumps(data)
-        return HTMLResponse(f"""
-        <html><body>
-        <script>
-          if (window.opener) {{
-            window.opener.postMessage({{"type":"slack_oauth_error","error":{json.dumps(err_json)}}}, "*");
-          }}
-          window.close();
-        </script>
-        <p>Slack install failed. You can close this window.</p>
-        </body></html>
-        """, status_code=400)
+        return popup_html({"type": "slack_oauth_error", "error": data}, 400)
 
     team = data.get("team") or {}
     team_id = team.get("id")
@@ -519,17 +506,7 @@ def oauth_callback(code: str | None = None, error: str | None = None, state: str
     scope = data.get("scope")
 
     if not team_id or not bot_token:
-        return HTMLResponse("""
-        <html><body>
-        <script>
-          if (window.opener) {
-            window.opener.postMessage({"type":"slack_oauth_error","error":"missing_team_or_token"}, "*");
-          }
-          window.close();
-        </script>
-        <p>Install failed. You can close this window.</p>
-        </body></html>
-        """, status_code=500)
+        return popup_html({"type": "slack_oauth_error", "error": "missing_team_id_or_bot_token"}, 500)
 
     try:
         upsert_secret(
@@ -539,37 +516,17 @@ def oauth_callback(code: str | None = None, error: str | None = None, state: str
                 "team_name": team_name,
                 "bot_user_id": bot_user_id,
                 "bot_token": bot_token,
-                "scope": scope
-            }
+                "scope": scope,
+            },
         )
     except Exception as e:
-        return HTMLResponse(f"""
-        <html><body>
-        <script>
-          if (window.opener) {{
-            window.opener.postMessage({{"type":"slack_oauth_error","error":{json.dumps(str(e))}}}, "*");
-          }}
-          window.close();
-        </script>
-        <p>Install failed while saving token. You can close this window.</p>
-        </body></html>
-        """, status_code=500)
+        return popup_html({"type": "slack_oauth_error", "error": f"secret_save_failed: {e}"}, 500)
 
-    return HTMLResponse(f"""
-    <html><body>
-    <script>
-      if (window.opener) {{
-        window.opener.postMessage({{
-          "type": "slack_oauth_success",
-          "team_id": {json.dumps(team_id)},
-          "team_name": {json.dumps(team_name or "")}
-        }}, "*");
-      }}
-      window.close();
-    </script>
-    <p>Slack workspace connected. You can close this window.</p>
-    </body></html>
-    """)
+    return popup_html({
+        "type": "slack_oauth_success",
+        "team_id": team_id,
+        "team_name": team_name or "",
+    })
 
 @app.get("/token/status")
 def token_status(team_id: str):
@@ -586,31 +543,27 @@ def token_status(team_id: str):
 @app.get("/workspaces")
 def list_workspaces():
     workspaces = []
-
     for page in secrets.get_paginator("list_secrets").paginate():
         for s in page.get("SecretList", []):
             name = s.get("Name", "")
-
             if not name.startswith(f"{SECRET_PREFIX}/"):
                 continue
-
             if s.get("DeletedDate"):
                 continue
 
             team_id = name.split(f"{SECRET_PREFIX}/")[-1]
             sec = read_secret(name)
-
             if not sec or "_error" in sec:
                 continue
-
             if not sec.get("bot_token"):
                 continue
 
             workspaces.append({
                 "team_id": team_id,
-                "team_name": sec.get("team_name")
+                "team_name": sec.get("team_name") or "",
             })
 
+    workspaces.sort(key=lambda x: ((x.get("team_name") or "").lower(), x["team_id"]))
     return {"ok": True, "workspaces": workspaces}
 
 @app.delete("/workspaces/{team_id}")
