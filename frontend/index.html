@@ -512,50 +512,37 @@
   });
 
   // ── Load Workspaces (session-scoped) ─────────────────────────────────────
-  async function loadWorkspaces() {
-    try {
+  async function loadWorkspaces(){
+    try{
       setStatus("Loading workspaces…");
-      // credentials:"include" ensures the session cookie is sent
-      const r    = await fetch(getApiBase() + "/workspaces", { credentials: "include" });
+      const r = await fetch(getApiBase() + "/workspaces");
       const data = await safeJson(r);
       show(data);
-
-      const sel   = document.getElementById("workspaceSelect");
-      const chSel = document.getElementById("channelSelect");
+      const sel = document.getElementById("workspaceSelect");
       sel.innerHTML = "";
-
-      if (r.status === 401) {
-        sel.innerHTML = '<option value="">— Not authenticated —</option>';
-        setStatus("Not authenticated", "warn");
-        return;
-      }
-
+      const list = data.workspaces || [];
       if (!data.ok) {
-        sel.innerHTML = '<option value="">— Failed to load —</option>';
+        sel.innerHTML = '<option value="">— failed to load workspaces —</option>';
         setStatus("Workspaces load failed", "err");
         return;
       }
-
-      const list = data.workspaces || [];
       if (list.length === 0) {
-        sel.innerHTML = '<option value="">— No workspaces yet —</option>';
-        chSel.innerHTML = '<option value="">— Load channels first —</option>';
+        sel.innerHTML = '<option value="">— none connected yet —</option>';
         setStatus("No workspaces connected");
         return;
       }
-
+      const last = localStorage.getItem("LAST_TEAM_ID") || "";
       list.forEach(w => {
         const opt = document.createElement("option");
-        opt.value       = w.team_id;
-        opt.textContent = w.team_id + (w.team_name ? " • " + w.team_name : "");
+        opt.value = w.team_id;
+        opt.textContent = w.team_id + (w.team_name ? (" • " + w.team_name) : "");
+        if (w.team_id === last) opt.selected = true;
         sel.appendChild(opt);
       });
-
       setStatus("Workspaces loaded", "ok");
       if (sel.value) loadChannels();
-
-    } catch (e) {
-      show({ ok: false, error: String(e) });
+    }catch(e){
+      show({ ok:false, error:String(e) });
       setStatus("Workspaces load failed", "err");
     }
   }
@@ -716,41 +703,19 @@
   }
 
   // ── Disconnect Workspace ─────────────────────────────────────────────────
-  async function disconnectWorkspace() {
-    try {
-      const sel   = document.getElementById("workspaceSelect");
-      const chSel = document.getElementById("channelSelect");
-      const team_id = sel.value;
-
-      if (!team_id) { setStatus("Select a workspace first", "warn"); return; }
-      if (!confirm("Disconnect this workspace? This will revoke the token.")) return;
-
+ async function disconnectWorkspace(){
+    try{
+      const team_id = document.getElementById("workspaceSelect").value;
+      if(!team_id) return;
+      if(!confirm("Disconnect this workspace? This will revoke the token and delete the secret.")) return;
       setStatus("Disconnecting…");
-      const r    = await fetch(getApiBase() + "/workspaces/" + encodeURIComponent(team_id), {
-        method: "DELETE",
-        credentials: "include",
-      });
+      const r = await fetch(getApiBase() + "/workspaces/" + encodeURIComponent(team_id), { method:"DELETE" });
       const data = await safeJson(r);
       show(data);
-
-      if (r.status === 403) { setStatus("Access denied — not your workspace", "err"); return; }
-      if (!data.ok) { setStatus("Disconnect failed", "err"); return; }
-
-      // Remove from dropdown directly (no re-fetch — avoids AWS propagation delay)
-      const optToRemove = sel.querySelector(`option[value="${CSS.escape(team_id)}"]`);
-      if (optToRemove) optToRemove.remove();
-
-      if (sel.options.length === 0) {
-        sel.innerHTML   = '<option value="">— No workspaces yet —</option>';
-        chSel.innerHTML = '<option value="">— Load channels first —</option>';
-        setStatus("Disconnected — no workspaces remaining", "ok");
-      } else {
-        sel.selectedIndex = 0;
-        setStatus("Disconnected", "ok");
-        loadChannels();
-      }
-    } catch (e) {
-      show({ ok: false, error: String(e) });
+      setStatus("Disconnected", "ok");
+      await loadWorkspaces();
+    }catch(e){
+      show({ ok:false, error:String(e) });
       setStatus("Disconnect failed", "err");
     }
   }
