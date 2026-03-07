@@ -129,7 +129,7 @@ Resources:
         ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/slackbot-api:${ImageTag}"
       Environment:
         Variables:
-          SECRET_PREFIX: !If [IsProd, "prod-slackbot", "slackbot"]
+          SECRET_PREFIX: !If [IsProd, "prod-slackbot", "dev-slackbot"]
           DDB_TABLE: !Ref MessagesTable
           UI_BASE_URL: !Sub "https://${FrontendDomain}"
           SLACK_CLIENT_ID: !Ref SlackClientId
