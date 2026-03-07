@@ -626,20 +626,29 @@
         return;
       }
 
-      // remove remembered workspace if same one was deleted
-      const last = localStorage.getItem("LAST_TEAM_ID");
-      if (last === team_id) {
+      // Clear remembered workspace
+      if (localStorage.getItem("LAST_TEAM_ID") === team_id) {
         localStorage.removeItem("LAST_TEAM_ID");
       }
 
-      // immediately reset UI
-      sel.innerHTML = '<option value="">— none connected yet —</option>';
-      chSel.innerHTML = '<option value="">— Load channels first —</option>';
+      // ✅ Remove ONLY this workspace from the dropdown immediately — no re-fetch.
+      // Re-fetching causes the deleted workspace to reappear because AWS Secrets Manager
+      // has a propagation delay and list_secrets still returns it for a few seconds.
+      const optToRemove = sel.querySelector(`option[value="${CSS.escape(team_id)}"]`);
+      if (optToRemove) optToRemove.remove();
 
-      setStatus("Disconnected", "ok");
+      // If no workspaces left, show empty state
+      if (sel.options.length === 0) {
+        sel.innerHTML = '<option value="">— none connected yet —</option>';
+        chSel.innerHTML = '<option value="">— Load channels first —</option>';
+        setStatus("Disconnected — no workspaces remaining", "ok");
+      } else {
+        // Auto-select first remaining workspace and load its channels
+        sel.selectedIndex = 0;
+        setStatus("Disconnected", "ok");
+        loadChannels();
+      }
 
-      // reload latest list from backend
-      await loadWorkspaces();
     }catch(e){
       show({ ok:false, error:String(e) });
       setStatus("Disconnect failed", "err");

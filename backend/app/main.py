@@ -513,8 +513,13 @@ def list_workspaces():
                 team_id = name.split(f"{SECRET_PREFIX}/")[-1]
                 sec = read_secret(name)
 
-                # skip unreadable/deleted secrets
+                # skip unreadable/deleted/errored secrets
                 if not sec or "_error" in sec:
+                    continue
+
+                # skip secrets with no bot_token — these are disconnected workspaces
+                # that AWS hasn't fully purged yet (Secrets Manager has propagation delay)
+                if not sec.get("bot_token"):
                     continue
 
                 workspaces.append({
