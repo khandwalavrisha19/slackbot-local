@@ -666,23 +666,26 @@
       container.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">Load channels first (Step 02)</span>';
       return;
     }
-    // Sync: if already populated, keep selections
     const existingChecked = new Set(
       Array.from(container.querySelectorAll('input[type=checkbox]:checked')).map(cb => cb.value)
     );
     container.innerHTML = "";
     opts.forEach(o => {
-      const label = document.createElement("label");
-      label.style.cssText = "display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-soft);cursor:pointer;padding:2px 0;font-weight:400;text-transform:none;letter-spacing:0;margin-bottom:0;";
+      const uid = "chk_" + containerId + "_" + o.value;
       const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.value = o.value;
-      cb.style.cssText = "accent-color:var(--accent);width:13px;height:13px;flex-shrink:0;";
-      // Check all by default or restore previous state
+      cb.type    = "checkbox";
+      cb.id      = uid;
+      cb.value   = o.value;
       cb.checked = existingChecked.size === 0 ? true : existingChecked.has(o.value);
-      label.appendChild(cb);
-      label.appendChild(document.createTextNode(o.textContent));
-      container.appendChild(label);
+      cb.style.cssText = "accent-color:var(--accent);width:14px;height:14px;flex-shrink:0;cursor:pointer;margin:0;padding:0;";
+      const lbl = document.createElement("label");
+      lbl.htmlFor = uid;
+      lbl.style.cssText = "display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:5px;cursor:pointer;width:100%;box-sizing:border-box;text-transform:none;letter-spacing:0;font-size:12px;color:var(--text-soft);font-weight:400;margin:0;";
+      lbl.onmouseover = () => lbl.style.background = "rgba(155,127,232,0.08)";
+      lbl.onmouseout  = () => lbl.style.background = "transparent";
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(o.textContent));
+      container.appendChild(lbl);
     });
   }
 
