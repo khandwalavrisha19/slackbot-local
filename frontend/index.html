@@ -935,7 +935,34 @@
     setStatus("Cleared");
   }
 
-  loadWorkspaces();
+  // ── Session Init ─────────────────────────────────────────────────────────
+  async function initSession() {
+    try {
+      const r = await fetchJson(getApiBase() + "/session");
+      if (r.ok && r.session_id) {
+        document.getElementById("sessionId").textContent = r.session_id.slice(0, 8) + "…";
+        document.getElementById("sessionBadge").style.display = "flex";
+        document.getElementById("logoutBtn").style.display    = "inline-block";
+      }
+    } catch(e) { /* non-fatal */ }
+    await loadWorkspaces();
+  }
+
+  async function logout() {
+    if (!confirm("Sign out? Your session will be cleared.")) return;
+    try {
+      await fetch(getApiBase() + "/logout", { method: "POST", credentials: "include" });
+    } catch(e) {}
+    // Clear UI
+    document.getElementById("workspaceSelect").innerHTML = '<option value="">— none connected yet —</option>';
+    document.getElementById("channelSelect").innerHTML   = '<option value="">— Load channels first —</option>';
+    document.getElementById("sessionBadge").style.display = "none";
+    document.getElementById("logoutBtn").style.display    = "none";
+    show({});
+    setStatus("Signed out", "warn");
+  }
+
+  initSession();
 </script>
 </body>
 </html>

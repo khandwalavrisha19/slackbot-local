@@ -7,7 +7,7 @@ import hmac
 import hashlib
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -24,22 +24,27 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-AWS_REGION = os.getenv("AWS_REGION", "ap-south-1").strip()
-SECRET_PREFIX = os.getenv("SECRET_PREFIX", "slackbot").strip()
-CLIENT_ID = os.getenv("SLACK_CLIENT_ID", "").strip()
-CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET", "").strip()
-REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI", "").strip()
-SLACK_SCOPES = os.getenv(
+# ── ENV CONFIG ────────────────────────────────────────────────────────────────
+AWS_REGION           = os.getenv("AWS_REGION", "ap-south-1").strip()
+SECRET_PREFIX        = os.getenv("SECRET_PREFIX", "slackbot").strip()
+CLIENT_ID            = os.getenv("SLACK_CLIENT_ID", "").strip()
+CLIENT_SECRET        = os.getenv("SLACK_CLIENT_SECRET", "").strip()
+REDIRECT_URI         = os.getenv("SLACK_REDIRECT_URI", "").strip()
+SLACK_SCOPES         = os.getenv(
     "SLACK_SCOPES",
     "channels:history,chat:write,users:read,groups:history,channels:read,groups:read,channels:join",
 ).strip()
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
+CORS_ORIGINS         = os.getenv("CORS_ORIGINS", "*")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "").strip()
-DDB_TABLE = os.getenv("DDB_TABLE", "").strip()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-UI_BASE_URL = os.getenv("UI_BASE_URL", "").rstrip("/")
+DDB_TABLE            = os.getenv("DDB_TABLE", "").strip()
+SESSIONS_TABLE       = os.getenv("SESSIONS_TABLE", "slackbot_sessions").strip()
+GROQ_API_KEY         = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODEL           = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+GROQ_URL             = "https://api.groq.com/openai/v1/chat/completions"
+UI_BASE_URL          = os.getenv("UI_BASE_URL", "").rstrip("/")
+SESSION_COOKIE_NAME  = "sb_session"
+SESSION_TTL_HOURS    = 72
+IS_PROD              = os.getenv("ENV", "dev").strip().lower() == "prod"
 
 origins = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()] or ["*"]
 
@@ -52,17 +57,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-secrets = boto3.client("secretsmanager", region_name=AWS_REGION)
-dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
-ddb_table = dynamodb.Table(DDB_TABLE) if DDB_TABLE else None
+secrets_client = boto3.client("secretsmanager", region_name=AWS_REGION)
+dynamodb       = boto3.resource("dynamodb", region_name=AWS_REGION)
+ddb_table      = dynamodb.Table(DDB_TABLE)      if DDB_TABLE      else None
+sessions_table = dynamodb.Table(SESSIONS_TABLE) if SESSIONS_TABLE else None
 
 frontend_default = Path(__file__).with_name("index.html")
-FRONTEND_PATH = Path(os.getenv("FRONTEND_PATH", str(frontend_default)))
+FRONTEND_PATH    = Path(os.getenv("FRONTEND_PATH", str(frontend_default)))
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GENERAL HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def no_cache(response: Response) -> Response:
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response.headers["Pragma"] = "no-cache"
+    response.headers["Pragma"]  = "no-cache"
     response.headers["Expires"] = "0"
     return response
 
@@ -74,17 +84,17 @@ def secret_name(team_id: str) -> str:
 def upsert_secret(name: str, payload: dict) -> None:
     body = json.dumps(payload)
     try:
-        secrets.create_secret(Name=name, SecretString=body)
+        secrets_client.create_secret(Name=name, SecretString=body)
     except ClientError as e:
         if e.response["Error"]["Code"] == "ResourceExistsException":
-            secrets.put_secret_value(SecretId=name, SecretString=body)
+            secrets_client.put_secret_value(SecretId=name, SecretString=body)
         else:
             raise
 
 
 def read_secret(name: str) -> Optional[dict]:
     try:
-        resp = secrets.get_secret_value(SecretId=name)
+        resp = secrets_client.get_secret_value(SecretId=name)
         return json.loads(resp.get("SecretString", "{}"))
     except ClientError as e:
         return {"_error": e.response["Error"]["Code"], "_message": str(e)}
@@ -107,7 +117,7 @@ def verify_slack_signature(signing_secret: str, timestamp: str, body: bytes, sig
         return False
     if abs(int(time.time()) - ts) > 300:
         return False
-    base = b"v0:" + timestamp.encode("utf-8") + b":" + body
+    base   = b"v0:" + timestamp.encode("utf-8") + b":" + body
     digest = hmac.new(signing_secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
     return hmac.compare_digest("v0=" + digest, signature)
 
@@ -129,18 +139,152 @@ def _ts_human(ts: str) -> str:
         return str(ts)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SESSION MANAGEMENT
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# DynamoDB table: slackbot_sessions
+#   PK  = session_id  (string, UUID)
+#   Attributes:
+#     team_ids   (list of strings)  — workspaces this session owns
+#     created_at (string ISO)
+#     expires_at (number, epoch)    — used as DynamoDB TTL attribute
+#
+# FLOW:
+#  1. User visits the page → GET /api/session auto-creates a session + sets
+#     an HttpOnly cookie named "sb_session".
+#  2. User clicks "Connect Slack" → OAuth popup opens.
+#  3. OAuth callback fires → team_id is bound to the session via bind_team_to_session().
+#  4. Every protected endpoint calls require_team_access(request, team_id) which:
+#       a. Reads the cookie
+#       b. Looks up the session in DynamoDB
+#       c. Checks that team_id is in session.team_ids
+#       d. Raises 403 if not
+
+def _require_sessions_table():
+    if sessions_table is None:
+        raise HTTPException(500, "SESSIONS_TABLE not configured")
+
+
+def create_session() -> str:
+    _require_sessions_table()
+    session_id = str(uuid.uuid4())
+    expires_at = int((datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS)).timestamp())
+    sessions_table.put_item(Item={
+        "session_id": session_id,
+        "team_ids":   [],
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "expires_at": expires_at,
+    })
+    logger.info(f"[session] created {session_id}")
+    return session_id
+
+
+def get_session(session_id: str) -> Optional[dict]:
+    if not session_id or sessions_table is None:
+        return None
+    try:
+        resp = sessions_table.get_item(Key={"session_id": session_id})
+        item = resp.get("Item")
+        if not item:
+            return None
+        if item.get("expires_at", 0) < int(time.time()):
+            return None
+        return item
+    except Exception as e:
+        logger.warning(f"[session] get error: {e}")
+        return None
+
+
+def bind_team_to_session(session_id: str, team_id: str) -> None:
+    _require_sessions_table()
+    sess = get_session(session_id)
+    if not sess:
+        return
+    current = sess.get("team_ids", [])
+    if team_id not in current:
+        current.append(team_id)
+    sessions_table.update_item(
+        Key={"session_id": session_id},
+        UpdateExpression="SET team_ids = :tids",
+        ExpressionAttributeValues={":tids": current},
+    )
+    logger.info(f"[session] bound team {team_id} to session {session_id}")
+
+
+def unbind_team_from_session(session_id: str, team_id: str) -> None:
+    if not session_id or sessions_table is None:
+        return
+    sess = get_session(session_id)
+    if not sess:
+        return
+    updated = [t for t in sess.get("team_ids", []) if t != team_id]
+    try:
+        sessions_table.update_item(
+            Key={"session_id": session_id},
+            UpdateExpression="SET team_ids = :tids",
+            ExpressionAttributeValues={":tids": updated},
+        )
+    except Exception as e:
+        logger.warning(f"[session] unbind error: {e}")
+
+
+def get_or_create_session(request: Request, response: Response) -> tuple[str, dict]:
+    cookie_val = request.cookies.get(SESSION_COOKIE_NAME)
+    sess       = get_session(cookie_val) if cookie_val else None
+    if not sess:
+        session_id = create_session()
+        sess       = get_session(session_id) or {}
+        _set_session_cookie(response, session_id)
+        return session_id, sess
+    return cookie_val, sess
+
+
+def _set_session_cookie(response: Response, session_id: str) -> None:
+    response.set_cookie(
+        key      = SESSION_COOKIE_NAME,
+        value    = session_id,
+        httponly = True,
+        secure   = IS_PROD,
+        samesite = "lax",
+        max_age  = SESSION_TTL_HOURS * 3600,
+        path     = "/",
+    )
+
+
+def require_session(request: Request) -> dict:
+    cookie_val = request.cookies.get(SESSION_COOKIE_NAME)
+    if not cookie_val:
+        raise HTTPException(401, "No session — connect a Slack workspace first")
+    sess = get_session(cookie_val)
+    if not sess:
+        raise HTTPException(401, "Session expired — please reconnect")
+    return sess
+
+
+def require_team_access(request: Request, team_id: str) -> dict:
+    sess    = require_session(request)
+    allowed = sess.get("team_ids", [])
+    if team_id not in allowed:
+        logger.warning(f"[auth] DENIED team={team_id} session={sess.get('session_id')} allowed={allowed}")
+        raise HTTPException(403, "Access denied — this workspace does not belong to your session")
+    return sess
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MESSAGE RETRIEVAL HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
 def _score_messages(items: list[dict], q: str) -> list[dict]:
     keywords = re.findall(r"\w+", q.lower())
     if not keywords:
         return items
-    # Filter to ONLY messages that actually contain at least one keyword
     scored = []
     for item in items:
         text = (item.get("text") or "").lower()
-        # Skip system messages like "has joined the channel"
         if re.search(r"<@\w+> has (joined|left)", text):
             continue
-        score = sum(text.count(kw) for kw in keywords)
+        score  = sum(text.count(kw) for kw in keywords)
         score += sum(2 for kw in keywords if kw in text[:80])
         if score > 0:
             scored.append((score, item))
@@ -153,23 +297,26 @@ def _format_messages(items: list[dict]) -> list[dict]:
     for item in items:
         text = (item.get("text") or "").strip()
         out.append({
-            "message_ts": item.get("ts") or item.get("sk", ""),
-            "user_id": item.get("user_id", "unknown"),
-            "username": item.get("username", ""),
-            "text": text,
-            "snippet": text[:400] + ("…" if len(text) > 400 else ""),
-            "channel_id": item.get("channel_id", ""),
-            "team_id": item.get("team_id", ""),
+            "message_ts":      item.get("ts") or item.get("sk", ""),
+            "user_id":         item.get("user_id", "unknown"),
+            "username":        item.get("username", ""),
+            "text":            text,
+            "snippet":         text[:400] + ("…" if len(text) > 400 else ""),
+            "channel_id":      item.get("channel_id", ""),
+            "team_id":         item.get("team_id", ""),
             "timestamp_human": _ts_human(item.get("ts") or item.get("sk", "")),
         })
     return out
 
 
-def retrieve_messages(team_id: str, channel_id: str, q: Optional[str] = None, from_date: Optional[str] = None,
-                      to_date: Optional[str] = None, user_id: Optional[str] = None,
-                      limit: int = 200, top_k: int = 10) -> list[dict]:
+def retrieve_messages(
+    team_id: str, channel_id: str,
+    q: Optional[str] = None, from_date: Optional[str] = None,
+    to_date: Optional[str] = None, user_id: Optional[str] = None,
+    limit: int = 200, top_k: int = 10,
+) -> list[dict]:
     require_ddb()
-    pk = f"{team_id}#{channel_id}"
+    pk       = f"{team_id}#{channel_id}"
     key_expr = Key("pk").eq(pk)
     if from_date and to_date:
         key_expr = key_expr & Key("sk").between(_date_to_sk(from_date), _date_to_sk(to_date, end_of_day=True))
@@ -182,10 +329,9 @@ def retrieve_messages(team_id: str, channel_id: str, q: Optional[str] = None, fr
         kwargs["FilterExpression"] = Attr("user_id").eq(user_id)
     try:
         response = ddb_table.query(**kwargs)
-        items = response.get("Items", [])
+        items    = response.get("Items", [])
     except Exception as e:
         raise RuntimeError(f"DynamoDB query failed: {e}")
-    # Always strip system/bot join-leave messages
     items = [i for i in items if not re.search(r"<@\w+> has (joined|left)", (i.get("text") or "").lower())]
     if not q or not q.strip():
         return _format_messages(items[:top_k])
@@ -193,276 +339,297 @@ def retrieve_messages(team_id: str, channel_id: str, q: Optional[str] = None, fr
     return _format_messages(matched[:top_k])
 
 
+def retrieve_messages_multi(
+    team_id: str, channel_ids: list[str],
+    q: Optional[str] = None, from_date: Optional[str] = None,
+    to_date: Optional[str] = None, user_id: Optional[str] = None,
+    limit: int = 200, top_k: int = 10,
+) -> list[dict]:
+    all_items: list[dict] = []
+    for channel_id in channel_ids:
+        try:
+            msgs = retrieve_messages(team_id, channel_id, q, from_date, to_date, user_id, limit, top_k * 3)
+            all_items.extend(msgs)
+        except Exception:
+            pass
+    if not all_items:
+        return []
+    if q and q.strip():
+        keywords = re.findall(r"\w+", q.lower())
+        def score(m):
+            text = (m.get("text") or "").lower()
+            s  = sum(text.count(kw) for kw in keywords)
+            s += sum(2 for kw in keywords if kw in text[:80])
+            return s
+        all_items.sort(key=score, reverse=True)
+    else:
+        all_items.sort(key=lambda m: m.get("message_ts", ""), reverse=True)
+    return all_items[:top_k]
+
+
+def _groq_complete(prompt: str, max_tokens: int = 1024) -> str:
+    if not GROQ_API_KEY:
+        raise HTTPException(500, "GROQ_API_KEY not set")
+    resp = requests.post(
+        GROQ_URL,
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+        json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
+              "temperature": 0.2, "max_tokens": max_tokens},
+        timeout=45,
+    )
+    data = resp.json()
+    if resp.status_code != 200:
+        raise HTTPException(502, f"Groq error: {data}")
+    return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ROUTES
+# ═══════════════════════════════════════════════════════════════════════════════
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     if FRONTEND_PATH.exists():
-        response = FileResponse(str(FRONTEND_PATH))
-        return no_cache(response)
-    return HTMLResponse(f"<h3>UI not found</h3><p>Expected at: <b>{FRONTEND_PATH}</b></p>", status_code=500)
+        return no_cache(FileResponse(str(FRONTEND_PATH)))
+    return HTMLResponse(f"<h3>UI not found at {FRONTEND_PATH}</h3>", status_code=500)
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health(response: Response):
     no_cache(response)
     return {
-        "status": "ok",
-        "region": AWS_REGION,
-        "secret_prefix": SECRET_PREFIX,
-        "redirect_uri": REDIRECT_URI,
-        "frontend_path": str(FRONTEND_PATH),
-        "frontend_path_exists": FRONTEND_PATH.exists(),
-        "ddb_table": DDB_TABLE,
+        "status": "ok", "region": AWS_REGION,
+        "ddb_table": DDB_TABLE, "sessions_table": SESSIONS_TABLE,
         "client_id_present": bool(CLIENT_ID),
-        "client_secret_present": bool(CLIENT_SECRET),
     }
 
+
+# ── SESSION ENDPOINTS ─────────────────────────────────────────────────────────
+
+@app.get("/api/session")
+def api_get_session(request: Request, response: Response):
+    """Called on page load. Creates session if needed. Returns owned team_ids."""
+    no_cache(response)
+    session_id, sess = get_or_create_session(request, response)
+    return {"ok": True, "session_id": session_id, "team_ids": sess.get("team_ids", [])}
+
+
+@app.post("/api/logout")
+def api_logout(request: Request, response: Response):
+    no_cache(response)
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+# ── OAUTH ─────────────────────────────────────────────────────────────────────
 
 @app.get("/install")
+@app.get("/api/install")
 def install():
     if not CLIENT_ID or not CLIENT_SECRET or not REDIRECT_URI:
-        return HTMLResponse("<h3>Missing ENV</h3><p>Set SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_REDIRECT_URI</p>", status_code=500)
-    params = {
-        "client_id": CLIENT_ID,
-        "scope": SLACK_SCOPES,
-        "redirect_uri": REDIRECT_URI,
-        "state": "slackbot_mvp",
-    }
+        return HTMLResponse("<h3>Missing ENV</h3>", status_code=500)
+    params = {"client_id": CLIENT_ID, "scope": SLACK_SCOPES,
+              "redirect_uri": REDIRECT_URI, "state": "slackbot_mvp"}
     return RedirectResponse("https://slack.com/oauth/v2/authorize?" + urlencode(params))
 
 
 @app.get("/oauth/callback")
-def oauth_callback(code: str | None = None, error: str | None = None, state: str | None = None):
-    if error:
-        return HTMLResponse(f"""
-        <html><body><script>
-        if (window.opener) window.opener.postMessage({{"type":"slack_oauth_error","error":{json.dumps(error)}}}, "*");
-        window.close();
-        </script><p>Slack install failed. You can close this window.</p></body></html>
-        """, status_code=400)
-    if not code:
-        return HTMLResponse("""
-        <html><body><script>
-        if (window.opener) window.opener.postMessage({"type":"slack_oauth_error","error":"missing_code"}, "*");
-        window.close();
-        </script><p>Missing code. You can close this window.</p></body></html>
-        """, status_code=400)
+@app.get("/api/oauth/callback")
+def oauth_callback(
+    request: Request, response: Response,
+    code: str | None = None, error: str | None = None, state: str | None = None,
+):
+    def _err(msg):
+        return HTMLResponse(f"""<html><body><script>
+        if(window.opener)window.opener.postMessage({{"type":"slack_oauth_error","error":{json.dumps(msg)}}},"*");
+        window.close();</script><p>Failed.</p></body></html>""", status_code=400)
 
-    r = requests.post(
-        "https://slack.com/api/oauth.v2.access",
-        data={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "code": code, "redirect_uri": REDIRECT_URI},
-        timeout=20,
-    )
+    if error:   return _err(error)
+    if not code: return _err("missing_code")
+
+    r    = requests.post("https://slack.com/api/oauth.v2.access",
+                         data={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
+                               "code": code, "redirect_uri": REDIRECT_URI}, timeout=20)
     data = r.json()
     if not data.get("ok"):
-        err_text = json.dumps(data)
-        return HTMLResponse(f"""
-        <html><body><script>
-        if (window.opener) window.opener.postMessage({{"type":"slack_oauth_error","error":{json.dumps(err_text)}}}, "*");
-        window.close();
-        </script><p>Slack install failed. You can close this window.</p></body></html>
-        """, status_code=400)
+        return _err(json.dumps(data))
 
-    team = data.get("team") or {}
-    team_id = team.get("id")
+    team      = data.get("team") or {}
+    team_id   = team.get("id")
     team_name = team.get("name")
     bot_token = data.get("access_token")
-    bot_user_id = data.get("bot_user_id")
-    scope = data.get("scope")
 
     if not team_id or not bot_token:
-        return HTMLResponse("""
-        <html><body><script>
-        if (window.opener) window.opener.postMessage({"type":"slack_oauth_error","error":"missing_team_or_token"}, "*");
-        window.close();
-        </script><p>Install failed. You can close this window.</p></body></html>
-        """, status_code=500)
+        return _err("missing_team_or_token")
 
     try:
         upsert_secret(secret_name(team_id), {
-            "team_id": team_id,
-            "team_name": team_name,
-            "bot_user_id": bot_user_id,
-            "bot_token": bot_token,
-            "scope": scope,
+            "team_id": team_id, "team_name": team_name,
+            "bot_user_id": data.get("bot_user_id"),
+            "bot_token": bot_token, "scope": data.get("scope"),
         })
     except Exception as e:
-        return HTMLResponse(f"""
-        <html><body><script>
-        if (window.opener) window.opener.postMessage({{"type":"slack_oauth_error","error":{json.dumps(str(e))}}}, "*");
-        window.close();
-        </script><p>Install failed while saving token. You can close this window.</p></body></html>
-        """, status_code=500)
+        return _err(str(e))
 
-    return HTMLResponse(f"""
-    <html><body><script>
-    if (window.opener) window.opener.postMessage({{"type":"slack_oauth_success","team_id":{json.dumps(team_id)},"team_name":{json.dumps(team_name or "")}}}, "*");
-    window.close();
-    </script><p>Slack workspace connected. You can close this window.</p></body></html>
-    """)
+    # Bind team to current session (or create a new one)
+    cookie_val = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie_val and get_session(cookie_val):
+        bind_team_to_session(cookie_val, team_id)
+    else:
+        new_sid = create_session()
+        bind_team_to_session(new_sid, team_id)
+        _set_session_cookie(response, new_sid)
+
+    return HTMLResponse(f"""<html><body><script>
+    if(window.opener)window.opener.postMessage({{"type":"slack_oauth_success","team_id":{json.dumps(team_id)},"team_name":{json.dumps(team_name or "")}}},"*");
+    window.close();</script><p>Connected.</p></body></html>""")
 
 
-@app.get("/token/status")
-def token_status(team_id: str, response: Response):
-    no_cache(response)
-    s = read_secret(secret_name(team_id))
-    if not s or "_error" in s:
-        return {"ok": True, "team_id": team_id, "has_token": False, "error": (s or {}).get("_error")}
-    token = s.get("bot_token", "")
-    return {
-        "ok": True,
-        "team_id": team_id,
-        "team_name": s.get("team_name"),
-        "bot_user_id": s.get("bot_user_id"),
-        "has_token": bool(token),
-        "bot_token_masked": mask_token(token),
-        "scope": s.get("scope"),
-    }
-
+# ── WORKSPACES ────────────────────────────────────────────────────────────────
 
 @app.get("/workspaces")
-def list_workspaces(response: Response):
+@app.get("/api/workspaces")
+def list_workspaces(request: Request, response: Response):
+    """Returns ONLY workspaces owned by the current session."""
     no_cache(response)
-    workspaces = []
-    seen = set()
-    for page in secrets.get_paginator("list_secrets").paginate():
-        for s in page.get("SecretList", []):
-            name = s.get("Name", "")
-            if not name.startswith(f"{SECRET_PREFIX}/"):
-                continue
-            if s.get("DeletedDate"):
-                continue
-            team_id = name.split(f"{SECRET_PREFIX}/")[-1]
-            if not team_id or team_id in seen:
-                continue
-            sec = read_secret(name)
-            if not sec or "_error" in sec:
-                continue
-            if not sec.get("bot_token"):
-                continue
-            workspaces.append({"team_id": team_id, "team_name": sec.get("team_name")})
-            seen.add(team_id)
+    session_id, sess = get_or_create_session(request, response)
+    allowed          = sess.get("team_ids", [])
+    workspaces       = []
+    for team_id in allowed:
+        sec = read_secret(secret_name(team_id))
+        if not sec or "_error" in sec or not sec.get("bot_token"):
+            continue
+        workspaces.append({"team_id": team_id, "team_name": sec.get("team_name")})
     workspaces.sort(key=lambda x: ((x.get("team_name") or "").lower(), x["team_id"].lower()))
     return {"ok": True, "workspaces": workspaces}
 
 
 @app.delete("/workspaces/{team_id}")
-def disconnect_workspace(team_id: str, response: Response):
+@app.delete("/api/workspaces/{team_id}")
+def disconnect_workspace(team_id: str, request: Request, response: Response):
     no_cache(response)
+    require_team_access(request, team_id)
     name = secret_name(team_id)
-    sec = read_secret(name)
+    sec  = read_secret(name)
     if not sec or "_error" in sec:
-        return {"ok": False, "team_id": team_id, "message": "Secret not found"}
-    bot_token = sec.get("bot_token")
+        return {"ok": False, "message": "Secret not found"}
     revoke_data = None
-    if bot_token:
+    if sec.get("bot_token"):
         try:
-            revoke_data = requests.post(
-                "https://slack.com/api/auth.revoke",
-                headers={"Authorization": f"Bearer {bot_token}"},
-                data={"test": "false"},
-                timeout=20,
-            ).json()
+            revoke_data = requests.post("https://slack.com/api/auth.revoke",
+                headers={"Authorization": f"Bearer {sec['bot_token']}"},
+                data={"test": "false"}, timeout=20).json()
         except Exception as e:
             revoke_data = {"ok": False, "error": str(e)}
     try:
-        secrets.delete_secret(SecretId=name, ForceDeleteWithoutRecovery=True)
+        secrets_client.delete_secret(SecretId=name, ForceDeleteWithoutRecovery=True)
     except Exception as e:
-        return {"ok": False, "team_id": team_id, "message": "Failed to delete secret", "detail": str(e), "revoked": revoke_data}
+        return {"ok": False, "detail": str(e), "revoked": revoke_data}
+    cookie_val = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie_val:
+        unbind_team_from_session(cookie_val, team_id)
     return {"ok": True, "team_id": team_id, "revoked": revoke_data}
 
 
-@app.get("/channels")
-def list_channels(team_id: str, response: Response):
+# ── TOKEN STATUS ──────────────────────────────────────────────────────────────
+
+@app.get("/token/status")
+@app.get("/api/token/status")
+def token_status(team_id: str, request: Request, response: Response):
     no_cache(response)
+    require_team_access(request, team_id)
+    s     = read_secret(secret_name(team_id))
+    if not s or "_error" in s:
+        return {"ok": True, "team_id": team_id, "has_token": False}
+    token = s.get("bot_token", "")
+    return {"ok": True, "team_id": team_id, "team_name": s.get("team_name"),
+            "has_token": bool(token), "bot_token_masked": mask_token(token), "scope": s.get("scope")}
+
+
+# ── CHANNELS ──────────────────────────────────────────────────────────────────
+
+@app.get("/channels")
+@app.get("/api/channels")
+def list_channels(team_id: str, request: Request, response: Response):
+    no_cache(response)
+    require_team_access(request, team_id)
     sec = read_secret(secret_name(team_id))
-    if not sec or "_error" in sec:
-        return {"ok": False, "message": "Secret not found", "detail": sec}
-    bot_token = sec.get("bot_token")
-    if not bot_token:
+    if not sec or "_error" in sec or not sec.get("bot_token"):
         return {"ok": False, "message": "bot_token missing"}
-    r = requests.get(
-        "https://slack.com/api/conversations.list",
-        headers={"Authorization": f"Bearer {bot_token}"},
-        params={"limit": 200, "types": "public_channel,private_channel", "exclude_archived": "true"},
-        timeout=20,
-    )
+    r    = requests.get("https://slack.com/api/conversations.list",
+                        headers={"Authorization": f"Bearer {sec['bot_token']}"},
+                        params={"limit": 200, "types": "public_channel,private_channel", "exclude_archived": "true"},
+                        timeout=20)
     data = r.json()
     if not data.get("ok"):
         return {"ok": False, "slack_error": data}
-    channels = [{"id": c["id"], "name": c["name"]} for c in data.get("channels", [])]
-    channels.sort(key=lambda c: c["name"].lower())
+    channels = sorted([{"id": c["id"], "name": c["name"]} for c in data.get("channels", [])],
+                      key=lambda c: c["name"].lower())
     return {"ok": True, "channels": channels}
 
 
+# ── FETCH MESSAGES ────────────────────────────────────────────────────────────
+
 @app.get("/fetch-messages")
-def fetch_messages(team_id: str, channel_id: str, response: Response):
+@app.get("/api/fetch-messages")
+def fetch_messages(team_id: str, channel_id: str, request: Request, response: Response):
     no_cache(response)
+    require_team_access(request, team_id)
     sec = read_secret(secret_name(team_id))
-    if not sec or "_error" in sec:
-        return {"ok": False, "message": "Secret not found", "detail": sec}
-    bot_token = sec.get("bot_token")
-    if not bot_token:
+    if not sec or not sec.get("bot_token"):
         return {"ok": False, "message": "bot_token missing"}
-    r = requests.get(
-        "https://slack.com/api/conversations.history",
-        headers={"Authorization": f"Bearer {bot_token}"},
-        params={"channel": channel_id, "limit": 50},
-        timeout=20,
-    )
+    r    = requests.get("https://slack.com/api/conversations.history",
+                        headers={"Authorization": f"Bearer {sec['bot_token']}"},
+                        params={"channel": channel_id, "limit": 50}, timeout=20)
     data = r.json()
     if not data.get("ok"):
         return {"ok": False, "slack_error": data}
-    return {"ok": True, "messages": [{"ts": m.get("ts"), "text": m.get("text"), "user": m.get("user")} for m in data.get("messages", [])]}
+    return {"ok": True, "messages": [{"ts": m.get("ts"), "text": m.get("text"), "user": m.get("user")}
+                                      for m in data.get("messages", [])]}
 
+
+# ── JOIN CHANNEL ──────────────────────────────────────────────────────────────
 
 @app.post("/join-channel")
-def join_channel(team_id: str, channel_id: str):
+@app.post("/api/join-channel")
+def join_channel(team_id: str, channel_id: str, request: Request):
+    require_team_access(request, team_id)
     sec = read_secret(secret_name(team_id))
-    if not sec or "_error" in sec:
-        return {"ok": False, "message": "Secret not found", "detail": sec}
-    bot_token = sec.get("bot_token")
-    if not bot_token:
+    if not sec or not sec.get("bot_token"):
         return {"ok": False, "message": "bot_token missing"}
-    data = requests.post(
-        "https://slack.com/api/conversations.join",
-        headers={"Authorization": f"Bearer {bot_token}"},
-        data={"channel": channel_id},
-        timeout=20,
-    ).json()
+    data = requests.post("https://slack.com/api/conversations.join",
+                         headers={"Authorization": f"Bearer {sec['bot_token']}"},
+                         data={"channel": channel_id}, timeout=20).json()
     if not data.get("ok") and data.get("error") != "already_in_channel":
         return {"ok": False, "slack_error": data}
     return {"ok": True, "joined": True, "channel_id": channel_id}
 
 
+# ── JOIN ALL PUBLIC ───────────────────────────────────────────────────────────
+
 @app.post("/join-all-public")
-def join_all_public(team_id: str):
+@app.post("/api/join-all-public")
+def join_all_public(team_id: str, request: Request):
+    require_team_access(request, team_id)
     sec = read_secret(secret_name(team_id))
-    if not sec or "_error" in sec:
-        return {"ok": False, "message": "Secret not found", "detail": sec}
-    bot_token = sec.get("bot_token")
-    if not bot_token:
+    if not sec or not sec.get("bot_token"):
         return {"ok": False, "message": "bot_token missing"}
     joined, failed, cursor = [], [], None
     while True:
         params = {"limit": 200, "types": "public_channel", "exclude_archived": "true"}
         if cursor:
             params["cursor"] = cursor
-        lst = requests.get(
-            "https://slack.com/api/conversations.list",
-            headers={"Authorization": f"Bearer {bot_token}"},
-            params=params,
-            timeout=20,
-        ).json()
+        lst = requests.get("https://slack.com/api/conversations.list",
+                           headers={"Authorization": f"Bearer {sec['bot_token']}"},
+                           params=params, timeout=20).json()
         if not lst.get("ok"):
             return {"ok": False, "slack_error": lst}
         for ch in lst.get("channels", []):
             ch_id = ch["id"]
-            j = requests.post(
-                "https://slack.com/api/conversations.join",
-                headers={"Authorization": f"Bearer {bot_token}"},
-                data={"channel": ch_id},
-                timeout=20,
-            ).json()
+            j = requests.post("https://slack.com/api/conversations.join",
+                              headers={"Authorization": f"Bearer {sec['bot_token']}"},
+                              data={"channel": ch_id}, timeout=20).json()
             if j.get("ok") or j.get("error") == "already_in_channel":
                 joined.append(ch_id)
             else:
@@ -473,45 +640,37 @@ def join_all_public(team_id: str):
     return {"ok": True, "joined_count": len(joined), "failed_count": len(failed), "failed": failed}
 
 
+# ── BACKFILL ──────────────────────────────────────────────────────────────────
+
 @app.post("/backfill-channel")
-def backfill_channel(team_id: str, channel_id: str, limit: int = 200, cursor: str | None = None):
+@app.post("/api/backfill-channel")
+def backfill_channel(team_id: str, channel_id: str, request: Request, limit: int = 200, cursor: str | None = None):
     require_ddb()
+    require_team_access(request, team_id)
     sec = read_secret(secret_name(team_id))
-    if not sec or "_error" in sec:
-        return {"ok": False, "message": "Secret not found", "detail": sec}
-    bot_token = sec.get("bot_token")
-    if not bot_token:
+    if not sec or not sec.get("bot_token"):
         return {"ok": False, "message": "bot_token missing"}
     params = {"channel": channel_id, "limit": limit}
     if cursor:
         params["cursor"] = cursor
-    data = requests.get(
-        "https://slack.com/api/conversations.history",
-        headers={"Authorization": f"Bearer {bot_token}"},
-        params=params,
-        timeout=20,
-    ).json()
+    data = requests.get("https://slack.com/api/conversations.history",
+                        headers={"Authorization": f"Bearer {sec['bot_token']}"},
+                        params=params, timeout=20).json()
     if not data.get("ok"):
         return {"ok": False, "slack_error": data}
     msgs = data.get("messages", []) or []
-    pk = f"{team_id}#{channel_id}"
+    pk   = f"{team_id}#{channel_id}"
     stored = 0
     for m in msgs:
         ts_msg = str(m.get("ts"))
         if not ts_msg:
             continue
         item = {
-            "pk": pk,
-            "sk": ts_msg,
-            "team_id": team_id,
-            "channel_id": channel_id,
-            "ts": ts_msg,
-            "user_id": m.get("user"),
-            "text": m.get("text", ""),
-            "thread_ts": m.get("thread_ts"),
-            "reply_count": m.get("reply_count", 0),
-            "subtype": m.get("subtype"),
-            "type": m.get("type"),
+            "pk": pk, "sk": ts_msg,
+            "team_id": team_id, "channel_id": channel_id, "ts": ts_msg,
+            "user_id": m.get("user"), "text": m.get("text", ""),
+            "thread_ts": m.get("thread_ts"), "reply_count": m.get("reply_count", 0),
+            "subtype": m.get("subtype"), "type": m.get("type"),
             "fetched_at": datetime.utcnow().isoformat() + "Z",
         }
         try:
@@ -521,14 +680,18 @@ def backfill_channel(team_id: str, channel_id: str, limit: int = 200, cursor: st
             if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
     next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
-    return {"ok": True, "channel_id": channel_id, "fetched": len(msgs), "stored_new": stored, "next_cursor": next_cursor, "has_more": bool(next_cursor)}
+    return {"ok": True, "channel_id": channel_id, "fetched": len(msgs),
+            "stored_new": stored, "next_cursor": next_cursor, "has_more": bool(next_cursor)}
 
+
+# ── SLACK EVENTS WEBHOOK (no session — uses Slack signing secret) ─────────────
 
 @app.post("/slack/events")
+@app.post("/api/slack/events")
 async def slack_events(request: Request):
     require_ddb()
     raw_body = await request.body()
-    payload = json.loads(raw_body.decode("utf-8"))
+    payload  = json.loads(raw_body.decode("utf-8"))
     if payload.get("type") == "url_verification":
         return JSONResponse({"challenge": payload.get("challenge")})
     timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
@@ -542,23 +705,17 @@ async def slack_events(request: Request):
         return JSONResponse({"ok": True})
     if event.get("bot_id") or event.get("subtype") in {"message_changed", "message_deleted"}:
         return JSONResponse({"ok": True})
-    team_id = payload.get("team_id")
+    team_id    = payload.get("team_id")
     channel_id = event.get("channel")
-    ts_msg = event.get("ts")
+    ts_msg     = event.get("ts")
     if not team_id or not channel_id or not ts_msg:
         return JSONResponse({"ok": True})
     item = {
-        "pk": f"{team_id}#{channel_id}",
-        "sk": str(ts_msg),
-        "team_id": team_id,
-        "channel_id": channel_id,
-        "ts": str(ts_msg),
-        "user_id": event.get("user"),
-        "text": event.get("text", ""),
-        "thread_ts": event.get("thread_ts"),
-        "subtype": event.get("subtype"),
-        "type": event.get("type"),
-        "fetched_at": datetime.utcnow().isoformat() + "Z",
+        "pk": f"{team_id}#{channel_id}", "sk": str(ts_msg),
+        "team_id": team_id, "channel_id": channel_id, "ts": str(ts_msg),
+        "user_id": event.get("user"), "text": event.get("text", ""),
+        "thread_ts": event.get("thread_ts"), "subtype": event.get("subtype"),
+        "type": event.get("type"), "fetched_at": datetime.utcnow().isoformat() + "Z",
     }
     try:
         ddb_table.put_item(Item=item, ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)")
@@ -568,35 +725,84 @@ async def slack_events(request: Request):
     return JSONResponse({"ok": True})
 
 
+# ── DB MESSAGES ───────────────────────────────────────────────────────────────
+
 @app.get("/db-messages")
-def db_messages(team_id: str, channel_id: str, limit: int = 50, response: Response = None):
+@app.get("/api/db-messages")
+def db_messages(team_id: str, channel_id: str, request: Request, limit: int = 50, response: Response = None):
     if response is not None:
         no_cache(response)
     require_ddb()
+    require_team_access(request, team_id)
     try:
-        resp = ddb_table.query(KeyConditionExpression=Key("pk").eq(f"{team_id}#{channel_id}"), Limit=limit, ScanIndexForward=False)
-        return {"ok": True, "source": "dynamodb", "count": resp.get("Count", 0), "items": resp.get("Items", [])}
+        resp = ddb_table.query(KeyConditionExpression=Key("pk").eq(f"{team_id}#{channel_id}"),
+                               Limit=limit, ScanIndexForward=False)
+        return {"ok": True, "count": resp.get("Count", 0), "items": resp.get("Items", [])}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
+# ── SEARCH ────────────────────────────────────────────────────────────────────
+
 @app.get("/api/search")
-def api_search(team_id: str = Query(...), channel_id: str = Query(...), q: str | None = Query(None),
-               from_date: str | None = Query(None, alias="from"), to_date: str | None = Query(None, alias="to"),
-               user_id: str | None = Query(None), limit: int = Query(200, ge=1, le=1000), top_k: int = Query(10, ge=1, le=12), response: Response = None):
+def api_search(
+    team_id: str = Query(...), channel_id: str = Query(...),
+    q: str | None = Query(None),
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    user_id: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+    top_k: int = Query(10, ge=1, le=12),
+    request: Request = None, response: Response = None,
+):
     if response is not None:
         no_cache(response)
-    request_id = str(uuid.uuid4())[:8]
+    require_team_access(request, team_id)
     if from_date and to_date and from_date > to_date:
-        raise HTTPException(400, "'from' date must be before 'to' date")
+        raise HTTPException(400, "'from' must be before 'to'")
+    request_id = str(uuid.uuid4())[:8]
     try:
         messages = retrieve_messages(team_id, channel_id, q, from_date, to_date, user_id, limit, top_k)
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     if not messages:
         return {"ok": True, "request_id": request_id, "query": q, "count": 0, "messages": [], "note": "No messages found."}
-    return {"ok": True, "request_id": request_id, "query": q, "filters": {"from": from_date, "to": to_date, "user_id": user_id}, "count": len(messages), "messages": messages}
+    return {"ok": True, "request_id": request_id, "query": q,
+            "filters": {"from": from_date, "to": to_date, "user_id": user_id},
+            "count": len(messages), "messages": messages}
 
+
+@app.get("/api/search/multi")
+def api_search_multi(
+    team_id: str = Query(...),
+    channel_ids: str = Query(...),
+    q: str | None = Query(None),
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    user_id: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+    top_k: int = Query(10, ge=1, le=50),
+    request: Request = None, response: Response = None,
+):
+    if response is not None:
+        no_cache(response)
+    require_team_access(request, team_id)
+    if from_date and to_date and from_date > to_date:
+        raise HTTPException(400, "'from' must be before 'to'")
+    ids = [c.strip() for c in channel_ids.split(",") if c.strip()]
+    if not ids:
+        raise HTTPException(400, "channel_ids must be non-empty")
+    request_id = str(uuid.uuid4())[:8]
+    messages   = retrieve_messages_multi(team_id, ids, q, from_date, to_date, user_id, limit, top_k)
+    if not messages:
+        return {"ok": True, "request_id": request_id, "query": q, "count": 0,
+                "messages": [], "channels_searched": len(ids), "note": "No messages found."}
+    return {"ok": True, "request_id": request_id, "query": q,
+            "filters": {"from": from_date, "to": to_date, "user_id": user_id},
+            "channels_searched": len(ids), "count": len(messages), "messages": messages}
+
+
+# ── ASK AI ────────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     team_id: str
@@ -618,235 +824,72 @@ class MultiChatRequest(BaseModel):
     top_k: int = 10
 
 
-def retrieve_messages_multi(
-    team_id: str,
-    channel_ids: list[str],
-    q: Optional[str] = None,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-    user_id: Optional[str] = None,
-    limit: int = 200,
-    top_k: int = 10,
-) -> list[dict]:
-    """Retrieve and merge messages from multiple channels, then rank by relevance."""
-    all_items: list[dict] = []
-    for channel_id in channel_ids:
-        try:
-            msgs = retrieve_messages(team_id, channel_id, q, from_date, to_date, user_id, limit, top_k * 3)
-            all_items.extend(msgs)
-        except Exception:
-            pass  # skip channels that error
-    if not all_items:
-        return []
-    if q and q.strip():
-        keywords = re.findall(r"\w+", q.lower())
-        def score(m):
-            text = (m.get("text") or "").lower()
-            s = sum(text.count(kw) for kw in keywords)
-            s += sum(2 for kw in keywords if kw in text[:80])
-            return s
-        all_items.sort(key=score, reverse=True)
-    else:
-        all_items.sort(key=lambda m: m.get("message_ts", ""), reverse=True)
-    return all_items[:top_k]
-
-
-@app.get("/api/search/multi")
-def api_search_multi(
-    team_id: str = Query(...),
-    channel_ids: str = Query(..., description="Comma-separated channel IDs"),
-    q: str | None = Query(None),
-    from_date: str | None = Query(None, alias="from"),
-    to_date: str | None = Query(None, alias="to"),
-    user_id: str | None = Query(None),
-    limit: int = Query(200, ge=1, le=1000),
-    top_k: int = Query(10, ge=1, le=50),
-    response: Response = None,
-):
-    """Search messages across multiple channels."""
-    if response is not None:
-        no_cache(response)
-    request_id = str(uuid.uuid4())[:8]
-    if from_date and to_date and from_date > to_date:
-        raise HTTPException(400, "'from' date must be before 'to' date")
-    ids = [c.strip() for c in channel_ids.split(",") if c.strip()]
-    if not ids:
-        raise HTTPException(400, "channel_ids must be a non-empty comma-separated list")
-    messages = retrieve_messages_multi(team_id, ids, q, from_date, to_date, user_id, limit, top_k)
+@app.post("/api/chat")
+def api_chat(body: ChatRequest, request: Request, response: Response):
+    no_cache(response)
+    require_team_access(request, body.team_id)
+    if not body.question.strip():
+        raise HTTPException(400, "question cannot be empty")
+    messages = retrieve_messages(body.team_id, body.channel_id, body.question,
+                                  body.from_date, body.to_date, body.user_id, 200, min(body.top_k, 12))
     if not messages:
-        return {"ok": True, "request_id": request_id, "query": q, "count": 0, "messages": [], "channels_searched": len(ids), "note": "No messages found."}
-    return {
-        "ok": True,
-        "request_id": request_id,
-        "query": q,
-        "filters": {"from": from_date, "to": to_date, "user_id": user_id},
-        "channels_searched": len(ids),
-        "count": len(messages),
-        "messages": messages,
-    }
+        return {"ok": True, "answer": "No relevant messages found in this channel.", "citations": []}
+    context = "\n".join([f"[{i+1}] {m['timestamp_human']} | {m['username'] or m['user_id']}: {m['snippet']}"
+                         for i, m in enumerate(messages)])
+    prompt = f"""You are a helpful assistant answering questions about Slack conversations.
+Answer ONLY using the messages below. Do NOT use outside knowledge.
+If not found say: "I couldn't find that in the available messages."
+
+SLACK MESSAGES:
+{context}
+
+QUESTION: {body.question}
+
+Answer: <your answer>
+Key points: <bullets if relevant>
+Action items: <action items or 'None'>
+Citations: <[1], [3] etc>"""
+    answer_text   = _groq_complete(prompt, 1024)
+    cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
+    citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
+    return {"ok": True, "question": body.question, "answer": answer_text,
+            "citations": citations, "retrieved_count": len(messages)}
 
 
 @app.post("/api/chat/multi")
-def api_chat_multi(body: MultiChatRequest, response: Response):
-    """Ask AI a question using messages from multiple channels."""
+def api_chat_multi(body: MultiChatRequest, request: Request, response: Response):
     no_cache(response)
+    require_team_access(request, body.team_id)
     if not body.question.strip():
         raise HTTPException(400, "question cannot be empty")
     if not body.channel_ids:
         raise HTTPException(400, "channel_ids must be non-empty")
-    messages = retrieve_messages_multi(
-        body.team_id, body.channel_ids, body.question,
-        body.from_date, body.to_date, body.user_id,
-        200, min(body.top_k, 20),
-    )
+    messages = retrieve_messages_multi(body.team_id, body.channel_ids, body.question,
+                                        body.from_date, body.to_date, body.user_id, 200, min(body.top_k, 20))
     if not messages:
-        return {"ok": True, "answer": "No relevant messages found across the selected channels for your question.", "citations": [], "channels_searched": len(body.channel_ids)}
-    context_lines = "\n".join([
+        return {"ok": True, "answer": "No relevant messages found across selected channels.",
+                "citations": [], "channels_searched": len(body.channel_ids)}
+    context = "\n".join([
         f"[{i+1}] {m['timestamp_human']} | #{m.get('channel_id','')} | {m['username'] or m['user_id']}: {m['snippet']}"
-        for i, m in enumerate(messages)
-    ])
-    prompt = f"""You are a helpful assistant that answers questions about Slack conversations spanning multiple channels.
-Answer ONLY using the Slack messages provided below. Do NOT use outside knowledge.
-Each message is labeled with a channel ID so you can reference which channel it came from.
-If the answer is not in the messages, say: "I couldn't find that in the available messages."
-
-SLACK MESSAGES (from {len(body.channel_ids)} channels):
-{context_lines}
-
-QUESTION: {body.question}
-
-Respond in this format:
-Answer: <your answer here>
-Key points: <bullet points if relevant, otherwise skip>
-Action items: <any action items mentioned, or 'None'>
-Citations: <list message numbers like [1], [3]>"""
-    if not GROQ_API_KEY:
-        raise HTTPException(500, "GROQ_API_KEY not set")
-    resp = requests.post(
-        GROQ_URL,
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 1500},
-        timeout=45,
-    )
-    data = resp.json()
-    if resp.status_code != 200:
-        raise HTTPException(502, f"Groq error: {data}")
-    answer_text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    cited_indices = [int(n) - 1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
-    citations = [messages[i] for i in dict.fromkeys(cited_indices)]
-    return {
-        "ok": True,
-        "question": body.question,
-        "answer": answer_text,
-        "citations": citations,
-        "retrieved_count": len(messages),
-        "channels_searched": len(body.channel_ids),
-    }
-
-
-@app.post("/api/chat")
-def api_chat(body: ChatRequest, response: Response):
-    no_cache(response)
-    if not body.question.strip():
-        raise HTTPException(400, "question cannot be empty")
-    messages = retrieve_messages(body.team_id, body.channel_id, body.question, body.from_date, body.to_date, body.user_id, 200, min(body.top_k, 12))
-    if not messages:
-        return {"ok": True, "answer": "No relevant messages found in this channel for your question.", "citations": []}
-    context_lines = "\n".join([f"[{i+1}] {m['timestamp_human']} | {m['username'] or m['user_id']}: {m['snippet']}" for i, m in enumerate(messages)])
-    prompt = f"""You are a helpful assistant that answers questions about Slack conversations.
-Answer ONLY using the Slack messages provided below. Do NOT use outside knowledge.
-If the answer is not in the messages, say: \"I couldn't find that in the available messages.\"
+        for i, m in enumerate(messages)])
+    prompt = f"""You are a helpful assistant answering questions about Slack conversations across {len(body.channel_ids)} channels.
+Answer ONLY using the messages below. Do NOT use outside knowledge.
 
 SLACK MESSAGES:
-{context_lines}
+{context}
 
 QUESTION: {body.question}
 
-Respond in this format:
-Answer: <your answer here>
-Key points: <bullet points if relevant, otherwise skip>
-Action items: <any action items mentioned, or 'None'>
-Citations: <list message numbers like [1], [3]>"""
-    if not GROQ_API_KEY:
-        raise HTTPException(500, "GROQ_API_KEY not set")
-    resp = requests.post(
-        GROQ_URL,
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 1024},
-        timeout=30,
-    )
-    data = resp.json()
-    if resp.status_code != 200:
-        raise HTTPException(502, f"Groq error: {data}")
-    answer_text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    cited_indices = [int(n) - 1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
-    citations = [messages[i] for i in dict.fromkeys(cited_indices)]
-    return {"ok": True, "question": body.question, "answer": answer_text, "citations": citations, "retrieved_count": len(messages)}
-
-
-@app.get("/api/health")
-def api_health(response: Response):
-    return health(response)
-
-
-@app.get("/api/install")
-def api_install():
-    return install()
-
-
-@app.get("/api/oauth/callback")
-def api_oauth_callback(code: str | None = None, error: str | None = None, state: str | None = None):
-    return oauth_callback(code, error, state)
-
-
-@app.get("/api/token/status")
-def api_token_status(team_id: str, response: Response):
-    return token_status(team_id, response)
-
-
-@app.get("/api/workspaces")
-def api_workspaces(response: Response):
-    return list_workspaces(response)
-
-
-@app.delete("/api/workspaces/{team_id}")
-def api_disconnect_workspace(team_id: str, response: Response):
-    return disconnect_workspace(team_id, response)
-
-
-@app.get("/api/channels")
-def api_channels(team_id: str, response: Response):
-    return list_channels(team_id, response)
-
-
-@app.get("/api/fetch-messages")
-def api_fetch_messages(team_id: str, channel_id: str, response: Response):
-    return fetch_messages(team_id, channel_id, response)
-
-
-@app.post("/api/slack/events")
-async def api_slack_events(request: Request):
-    return await slack_events(request)
-
-
-@app.get("/api/db-messages")
-def api_db_messages(team_id: str, channel_id: str, limit: int = 50, response: Response = None):
-    return db_messages(team_id, channel_id, limit, response)
-
-
-@app.post("/api/join-channel")
-def api_join_channel(team_id: str, channel_id: str):
-    return join_channel(team_id, channel_id)
-
-
-@app.post("/api/join-all-public")
-def api_join_all_public(team_id: str):
-    return join_all_public(team_id)
-
-
-@app.post("/api/backfill-channel")
-def api_backfill_channel(team_id: str, channel_id: str, limit: int = 200, cursor: str | None = None):
-    return backfill_channel(team_id, channel_id, limit, cursor)
+Answer: <your answer>
+Key points: <bullets if relevant>
+Action items: <action items or 'None'>
+Citations: <[1], [3] etc>"""
+    answer_text   = _groq_complete(prompt, 1500)
+    cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
+    citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
+    return {"ok": True, "question": body.question, "answer": answer_text,
+            "citations": citations, "retrieved_count": len(messages),
+            "channels_searched": len(body.channel_ids)}
 
 
 handler = Mangum(app)

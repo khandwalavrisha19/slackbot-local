@@ -60,6 +60,25 @@ Resources:
           KeyType: RANGE
 
   # -------------------------
+  # SESSIONS TABLE (Week 5 – user isolation)
+  # -------------------------
+  SessionsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      TableName: !Sub "${Env}-slackbot-sessions"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: session_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: session_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+  # -------------------------
   # IAM ROLE FOR LAMBDA
   # -------------------------
   LambdaExecutionRole:
@@ -99,7 +118,9 @@ Resources:
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
                   - dynamodb:Scan
-                Resource: !GetAtt MessagesTable.Arn
+                Resource:
+                  - !GetAtt MessagesTable.Arn
+                  - !GetAtt SessionsTable.Arn
 
         - PolicyName: !Sub "${Env}-slackbot-secrets"
           PolicyDocument:
@@ -138,6 +159,8 @@ Resources:
           SLACK_REDIRECT_URI: !Sub "https://${FrontendDomain}/api/oauth/callback"
           GROQ_API_KEY: !Ref GroqApiKey
           SLACK_SCOPES: "channels:read,groups:read,channels:history,groups:history,users:read,chat:write,channels:join"
+          SESSIONS_TABLE: !Ref SessionsTable
+          ENV: !Ref Env
 
   # -------------------------
   # S3 BUCKET
@@ -242,6 +265,9 @@ Conditions:
 Outputs:
   LambdaName:
     Value: !Ref SlackbotFunction
+
+  SessionsTableName:
+    Value: !Ref SessionsTable
 
   FrontendBucketName:
     Value: !Ref FrontendBucket
