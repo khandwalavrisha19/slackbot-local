@@ -133,15 +133,19 @@ def _score_messages(items: list[dict], q: str) -> list[dict]:
     keywords = re.findall(r"\w+", q.lower())
     if not keywords:
         return items
+    # Filter to ONLY messages that actually contain at least one keyword
     scored = []
     for item in items:
         text = (item.get("text") or "").lower()
+        # Skip system messages like "has joined the channel"
+        if re.search(r"<@\w+> has (joined|left)", text):
+            continue
         score = sum(text.count(kw) for kw in keywords)
         score += sum(2 for kw in keywords if kw in text[:80])
-        scored.append((score, item))
+        if score > 0:
+            scored.append((score, item))
     scored.sort(key=lambda x: x[0], reverse=True)
-    matched = [item for s, item in scored if s > 0]
-    return matched if matched else [item for _, item in scored]
+    return [item for _, item in scored]
 
 
 def _format_messages(items: list[dict]) -> list[dict]:
@@ -181,9 +185,12 @@ def retrieve_messages(team_id: str, channel_id: str, q: Optional[str] = None, fr
         items = response.get("Items", [])
     except Exception as e:
         raise RuntimeError(f"DynamoDB query failed: {e}")
+    # Always strip system/bot join-leave messages
+    items = [i for i in items if not re.search(r"<@\w+> has (joined|left)", (i.get("text") or "").lower())]
     if not q or not q.strip():
         return _format_messages(items[:top_k])
-    return _format_messages(_score_messages(items, q)[:top_k])
+    matched = _score_messages(items, q)
+    return _format_messages(matched[:top_k])
 
 
 @app.get("/", response_class=HTMLResponse)

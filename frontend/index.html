@@ -667,6 +667,9 @@
     }
   }
 
+  // Track selections per container independently
+  const _multiSelections = {};
+
   function populateMultiChannelList(containerId) {
     const container = document.getElementById(containerId);
     const channelSel = document.getElementById("channelSelect");
@@ -675,21 +678,26 @@
       container.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">Load channels first (Step 02)</span>';
       return;
     }
-    const existingChecked = new Set(
-      Array.from(container.querySelectorAll('input[type=checkbox]:checked')).map(cb => cb.value)
-    );
+    // First time: default all checked. After that: restore user's choices.
+    if (!_multiSelections[containerId]) {
+      _multiSelections[containerId] = new Set(opts.map(o => o.value));
+    }
+    const sel = _multiSelections[containerId];
     container.innerHTML = "";
     opts.forEach(o => {
-      const uid = "chk_" + containerId + "_" + o.value;
+      const uid = "chk_" + containerId + "_" + o.value.replace(/[^a-zA-Z0-9]/g,"_");
       const cb = document.createElement("input");
-      cb.type    = "checkbox";
-      cb.id      = uid;
-      cb.value   = o.value;
-      cb.checked = existingChecked.size === 0 ? true : existingChecked.has(o.value);
-      cb.style.cssText = "accent-color:var(--accent);width:14px;height:14px;flex-shrink:0;cursor:pointer;margin:0;padding:0;";
+      cb.type  = "checkbox";
+      cb.id    = uid;
+      cb.value = o.value;
+      cb.checked = sel.has(o.value);
+      // Update our tracking set on change
+      cb.addEventListener("change", () => {
+        if (cb.checked) sel.add(o.value); else sel.delete(o.value);
+      });
       const lbl = document.createElement("label");
       lbl.htmlFor = uid;
-      lbl.style.cssText = "display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:5px;cursor:pointer;width:100%;box-sizing:border-box;text-transform:none;letter-spacing:0;font-size:12px;color:var(--text-soft);font-weight:400;margin:0;";
+      lbl.style.cssText = "display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:pointer;width:100%;box-sizing:border-box;text-transform:none;letter-spacing:0;font-size:13px;color:var(--text-soft);font-weight:400;margin:0;";
       lbl.onmouseover = () => lbl.style.background = "rgba(155,127,232,0.08)";
       lbl.onmouseout  = () => lbl.style.background = "transparent";
       lbl.appendChild(cb);
@@ -702,10 +710,18 @@
     return Array.from(document.getElementById(containerId).querySelectorAll('input[type=checkbox]:checked')).map(cb => cb.value);
   }
 
-  function selectAllSearchChannels() { document.getElementById("multiSearchChannelList").querySelectorAll('input').forEach(cb => cb.checked = true); }
-  function clearAllSearchChannels()  { document.getElementById("multiSearchChannelList").querySelectorAll('input').forEach(cb => cb.checked = false); }
-  function selectAllChatChannels()   { document.getElementById("multiChatChannelList").querySelectorAll('input').forEach(cb => cb.checked = true); }
-  function clearAllChatChannels()    { document.getElementById("multiChatChannelList").querySelectorAll('input').forEach(cb => cb.checked = false); }
+  function selectAllSearchChannels() {
+    document.getElementById("multiSearchChannelList").querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = true; if(_multiSelections["multiSearchChannelList"]) _multiSelections["multiSearchChannelList"].add(cb.value); });
+  }
+  function clearAllSearchChannels() {
+    document.getElementById("multiSearchChannelList").querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = false; if(_multiSelections["multiSearchChannelList"]) _multiSelections["multiSearchChannelList"].delete(cb.value); });
+  }
+  function selectAllChatChannels() {
+    document.getElementById("multiChatChannelList").querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = true; if(_multiSelections["multiChatChannelList"]) _multiSelections["multiChatChannelList"].add(cb.value); });
+  }
+  function clearAllChatChannels() {
+    document.getElementById("multiChatChannelList").querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = false; if(_multiSelections["multiChatChannelList"]) _multiSelections["multiChatChannelList"].delete(cb.value); });
+  }
 
   async function searchMessages(){
     try {
