@@ -4,792 +4,261 @@
   <meta charset="utf-8" />
   <title>Slack Chatbot Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --bg: #eef0f7;
-      --surface: #f7f5fc;
-      --surface2: #ece9f5;
-      --border: rgba(140,120,200,0.13);
-      --border-hover: rgba(140,120,200,0.24);
-      --text: #2c2840;
-      --text-muted: #a49dbf;
-      --text-soft: #7b73a0;
-      --accent: #9b7fe8;
-      --accent-glow: rgba(155,127,232,0.14);
-      --danger: #e07a8a;
-      --danger-bg: rgba(224,122,138,0.09);
-      --success: #6dbfa0;
-      --radius: 10px;
-      --radius-sm: 6px;
-    }
-
-    body {
-      font-family: 'DM Sans', sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      font-size: 14px;
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    body::before {
-      content: '';
-      position: fixed;
-      inset: 0;
-      background:
-        radial-gradient(ellipse 60% 40% at 15% 10%, rgba(185,160,245,0.18) 0%, transparent 65%),
-        radial-gradient(ellipse 50% 40% at 85% 80%, rgba(130,210,190,0.13) 0%, transparent 65%),
-        radial-gradient(ellipse 40% 30% at 70% 20%, rgba(245,170,185,0.10) 0%, transparent 60%);
-      pointer-events: none;
-      z-index: 0;
-    }
-
-    header {
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 28px;
-      height: 56px;
-      background: rgba(238,240,247,0.85);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border-bottom: 1px solid var(--border);
-    }
-
-    .header-left { display: flex; align-items: center; gap: 10px; }
-
-    .logo-icon {
-      width: 26px; height: 26px;
-      background: var(--accent);
-      border-radius: 7px;
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0;
-    }
-    .logo-icon svg { display: block; }
-
-    h1 { font-size: 14px; font-weight: 500; color: var(--text); letter-spacing: -0.01em; }
-
-    .pill {
-      font-size: 11px;
-      font-family: 'DM Mono', monospace;
-      font-weight: 500;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text-soft);
-      transition: all 0.3s ease;
-      letter-spacing: 0.02em;
-    }
-    .pill.ok   { border-color: rgba(109,191,160,0.35); color: #3d9e7e; background: rgba(109,191,160,0.12); }
-    .pill.warn { border-color: rgba(220,170,80,0.35);  color: #9e7820; background: rgba(220,170,80,0.10); }
-    .pill.err  { border-color: rgba(224,122,138,0.35); color: var(--danger); background: var(--danger-bg); }
-
-    .wrap {
-      position: relative; z-index: 1;
-      display: grid; grid-template-columns: 360px 1fr;
-      gap: 16px; padding: 20px 24px;
-      max-width: 1200px; margin: 0 auto;
-    }
-
-    .sidebar { display: flex; flex-direction: column; gap: 10px; }
-
-    .panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-      transition: border-color 0.2s;
-      animation: fadeIn 0.3s ease both;
-    }
-    .panel:nth-child(1) { animation-delay: 0.00s; }
-    .panel:nth-child(2) { animation-delay: 0.07s; }
-    .panel:nth-child(3) { animation-delay: 0.14s; }
-    .panel:hover { border-color: var(--border-hover); }
-
-    .panel-header {
-      display: flex; align-items: center; gap: 8px;
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .step-badge {
-      font-size: 10px; font-family: 'DM Mono', monospace; font-weight: 500;
-      color: var(--text-muted); background: var(--surface2);
-      border: 1px solid var(--border); border-radius: 4px;
-      padding: 2px 6px; letter-spacing: 0.05em;
-    }
-
-    .panel-title {
-      font-size: 12px; font-weight: 600; color: var(--text-soft);
-      letter-spacing: 0.03em; text-transform: uppercase;
-    }
-
-    .panel-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-
-    .hint { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
-
-    label {
-      display: block; font-size: 11px; font-weight: 500;
-      color: var(--text-muted); letter-spacing: 0.04em;
-      text-transform: uppercase; margin-bottom: 5px;
-    }
-
-    input, select {
-      width: 100%; padding: 9px 12px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border);
-      background: var(--bg); color: var(--text);
-      font-family: 'DM Sans', sans-serif; font-size: 13px;
-      outline: none; transition: border-color 0.2s, box-shadow 0.2s;
-      appearance: none; -webkit-appearance: none;
-    }
-    select {
-      background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23a49dbf' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-      background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px;
-    }
-    input:focus, select:focus {
-      border-color: rgba(155,127,232,0.45);
-      box-shadow: 0 0 0 3px var(--accent-glow);
-    }
-    input::placeholder { color: var(--text-muted); font-size: 12px; }
-
-    .btn-group { display: flex; flex-wrap: wrap; gap: 6px; }
-
-    button {
-      padding: 7px 13px; border-radius: var(--radius-sm);
-      border: 1px solid var(--border); background: var(--surface2);
-      color: var(--text-soft); cursor: pointer;
-      font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500;
-      transition: all 0.15s ease; white-space: nowrap; letter-spacing: 0.01em;
-    }
-    button:hover { background: rgba(155,127,232,0.08); border-color: var(--border-hover); color: var(--text); }
-    button:active { transform: scale(0.98); }
-
-    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    button.primary:hover { background: #b096f0; border-color: #b096f0; }
-
-    button.danger { border-color: rgba(224,122,138,0.25); color: var(--danger); background: transparent; }
-    button.danger:hover { background: var(--danger-bg); border-color: rgba(224,122,138,0.45); }
-
-    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .field { display: flex; flex-direction: column; }
-
-    .output-panel {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); display: flex; flex-direction: column;
-      position: sticky; top: 76px; height: calc(100vh - 96px); overflow: hidden;
-    }
-    .output-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
-    }
-    .output-title { font-size: 12px; font-weight: 600; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.04em; }
-
-    .status-bar { font-size: 12px; font-family: 'DM Mono', monospace; color: var(--text-muted); transition: color 0.3s; }
-    .status-bar.ok   { color: #3d9e7e; }
-    .status-bar.err  { color: var(--danger); }
-    .status-bar.warn { color: #9e7820; }
-
-    .output-body { flex: 1; overflow-y: auto; padding: 14px 16px; }
-    .output-body::-webkit-scrollbar { width: 4px; }
-    .output-body::-webkit-scrollbar-track { background: transparent; }
-    .output-body::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 2px; }
-
-    pre {
-      font-family: 'DM Mono', monospace; font-size: 12px;
-      line-height: 1.65; color: var(--text-soft);
-      white-space: pre-wrap; word-break: break-word;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(4px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-
-    @media (max-width: 900px) {
-      .wrap { grid-template-columns: 1fr; }
-      .output-panel { position: static; height: auto; min-height: 300px; }
-    }
+    :root{--bg:#eef0f7;--surface:#f7f5fc;--border:#ddd7ef;--text:#2c2840;--muted:#7b73a0;--ok:#3d9e7e;--warn:#9e7820;--err:#c45468;--accent:#8c78c8}
+    *{box-sizing:border-box} body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--text)}
+    header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;background:#fff;border-bottom:1px solid var(--border);position:sticky;top:0}
+    h1{font-size:18px;margin:0} .pill{border:1px solid var(--border);padding:6px 10px;border-radius:999px;font-size:12px;background:#fff}
+    .pill.ok{color:var(--ok)} .pill.warn{color:var(--warn)} .pill.err{color:var(--err)}
+    .wrap{display:grid;grid-template-columns:420px 1fr;gap:18px;padding:18px;max-width:1400px;margin:0 auto}
+    .panel,.output{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:16px}
+    .panel{margin-bottom:16px} .panel h2{font-size:15px;margin:0 0 12px}
+    .field{display:flex;flex-direction:column;gap:6px;margin:12px 0} select,input,button,textarea{font:inherit}
+    select,input,textarea{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff}
+    textarea{min-height:90px;resize:vertical} .row{display:flex;gap:8px;flex-wrap:wrap}
+    button{padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:#fff;cursor:pointer}
+    button.primary{background:var(--accent);color:#fff;border-color:var(--accent)} button.danger{color:var(--err)}
+    .status{font-size:12px;color:var(--muted);margin-top:8px} pre{white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.5}
+    @media(max-width:900px){.wrap{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
-
 <header>
-  <div class="header-left">
-    <div class="logo-icon">
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-        <rect x="2" y="2" width="4" height="4" rx="1" fill="white" opacity="0.95"/>
-        <rect x="8" y="2" width="4" height="4" rx="1" fill="white" opacity="0.65"/>
-        <rect x="2" y="8" width="4" height="4" rx="1" fill="white" opacity="0.65"/>
-        <rect x="8" y="8" width="4" height="4" rx="1" fill="white" opacity="0.95"/>
-      </svg>
-    </div>
-    <h1>Slack Chatbot Dashboard</h1>
-  </div>
+  <h1>Slack Chatbot Dashboard</h1>
   <span class="pill" id="pill">Idle</span>
 </header>
-
 <div class="wrap">
-  <div class="sidebar">
-
-    <!-- Connect -->
+  <div>
     <div class="panel">
-      <div class="panel-header">
-        <span class="step-badge">01</span>
-        <span class="panel-title">Connect</span>
+      <h2>1. Connect</h2>
+      <div class="row">
+        <button class="primary" onclick="connectSlack()">Connect Slack</button>
+        <button onclick="loadWorkspaces()">Load Workspaces</button>
+        <button onclick="checkToken()">Token Status</button>
+        <button class="danger" onclick="disconnectWorkspace()">Disconnect</button>
       </div>
-      <div class="panel-body">
-        <p class="hint">Connect a Slack workspace via OAuth. The UI will auto-select the workspace after install.</p>
-        <div class="btn-group">
-          <button class="primary" onclick="connectSlack()">Connect Slack</button>
-          <button onclick="location.reload()">Refresh</button>
-        </div>
-        <div class="field">
-          <label>Workspace</label>
-          <select id="workspaceSelect" onchange="loadChannels()">
-            <option value="">— No workspaces loaded —</option>
-          </select>
-        </div>
-        <div class="btn-group">
-          <button onclick="loadWorkspaces()">Load Workspaces</button>
-          <button onclick="checkToken()">Token Status</button>
-          <button class="danger" onclick="disconnectWorkspace()">Disconnect</button>
-        </div>
+      <div class="field">
+        <label>Workspace</label>
+        <select id="workspaceSelect" onchange="loadChannels()">
+          <option value="">— loading —</option>
+        </select>
+      </div>
+      <div class="status" id="status">Ready</div>
+    </div>
+
+    <div class="panel">
+      <h2>2. Channel</h2>
+      <div class="field">
+        <label>Channel</label>
+        <select id="channelSelect"><option value="">— Load channels first —</option></select>
+      </div>
+      <div class="row">
+        <button onclick="joinSelectedAndBackfill()">Join + Backfill</button>
+        <button onclick="joinAllAndBackfill()">Join All Public</button>
+        <button onclick="loadMessagesFromDB()">Load from DB</button>
       </div>
     </div>
 
-    <!-- Channel -->
     <div class="panel">
-      <div class="panel-header">
-        <span class="step-badge">02</span>
-        <span class="panel-title">Channel</span>
-      </div>
-      <div class="panel-body">
-        <div class="field">
-          <label>Channel</label>
-          <select id="channelSelect">
-            <option value="">— Load channels first —</option>
-          </select>
-        </div>
-        <div class="btn-group">
-          <button onclick="joinSelectedAndBackfill()">Join + Backfill</button>
-          <button onclick="joinAllAndBackfill()">Join All Public</button>
-          <button onclick="loadMessagesFromDB()">Load from DB</button>
-        </div>
-      </div>
+      <h2>3. Search</h2>
+      <div class="field"><label>Keyword</label><input id="q" placeholder="deployment, bug, deadline" /></div>
+      <div class="row"><input id="fromDate" type="date" /><input id="toDate" type="date" /></div>
+      <div class="row"><button onclick="searchMessages()">Search</button></div>
     </div>
 
-    <!-- Search -->
     <div class="panel">
-      <div class="panel-header">
-        <span class="step-badge">03</span>
-        <span class="panel-title">Search Messages</span>
-      </div>
-      <div class="panel-body">
-        <p class="hint">Search your Slack messages stored in DynamoDB. Add filters to narrow results.</p>
-        <div class="field">
-          <label>Keyword</label>
-          <input id="keyword" placeholder="e.g. deployment error" />
-        </div>
-        <div class="row-2">
-          <div class="field">
-            <label>From</label>
-            <input id="fromDate" type="date" />
-          </div>
-          <div class="field">
-            <label>To</label>
-            <input id="toDate" type="date" />
-          </div>
-        </div>
-        <div class="field">
-          <label>User ID (optional)</label>
-          <input id="searchUserId" placeholder="e.g. U012AB3CD" />
-        </div>
-        <div class="btn-group">
-          <button class="primary" onclick="searchMessages()">Search</button>
-          <button onclick="clearSearch()">Clear</button>
-        </div>
-      </div>
+      <h2>4. Chat</h2>
+      <div class="field"><label>Question</label><textarea id="question" placeholder="What did we decide about deployment?"></textarea></div>
+      <div class="row"><button onclick="askChat()">Ask</button></div>
     </div>
-
-    <!-- Chat (Day 2 — input ready, endpoint wired when backend exists) -->
-    <div class="panel">
-      <div class="panel-header">
-        <span class="step-badge">04</span>
-        <span class="panel-title">Ask AI</span>
-      </div>
-      <div class="panel-body">
-        <p class="hint">Ask a question about your Slack messages. The AI answers using only your data.</p>
-        <div class="field">
-          <label>Your Question</label>
-          <textarea id="chatQuestion"
-            placeholder="e.g. What did we decide about the API design?"
-            style="width:100%;min-height:72px;resize:vertical;padding:9px 12px;
-                   border-radius:6px;border:1px solid var(--border);
-                   background:var(--bg);color:var(--text);
-                   font-family:'DM Sans',sans-serif;font-size:13px;
-                   outline:none;transition:border-color .2s,box-shadow .2s;"></textarea>
-        </div>
-        <div class="btn-group">
-          <button class="primary" id="askBtn" onclick="askChat()">Ask</button>
-        </div>
-        <div id="chatAnswer" style="display:none;margin-top:8px;padding:10px 12px;
-             border-radius:6px;background:var(--surface2);border:1px solid var(--border);">
-          <div style="font-size:11px;font-weight:600;color:var(--text-muted);
-               text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Answer</div>
-          <div id="chatAnswerText" style="font-size:13px;color:var(--text);line-height:1.6;"></div>
-          <div id="chatCitations" style="margin-top:10px;"></div>
-        </div>
-      </div>
-    </div>
-
   </div>
 
-  <!-- Output -->
-  <div class="output-panel">
-    <div class="output-header">
-      <span class="output-title">Output</span>
-      <span class="status-bar" id="status">Idle</span>
-    </div>
-    <div class="output-body">
-      <pre id="out">{}</pre>
-    </div>
+  <div class="output">
+    <h2 style="margin-top:0">Output</h2>
+    <pre id="out">Waiting…</pre>
   </div>
 </div>
-
 <script>
-  // Derives API base from the current origin — works with S3+CloudFront or any custom domain
-  function getApiBase(){
-    return window.location.origin + "/api";
+  function getApiBase(){ return window.location.origin + "/api"; }
+  function setStatus(msg, type=""){
+    const s=document.getElementById("status"), p=document.getElementById("pill");
+    s.textContent=msg; p.textContent=msg.length>24?msg.slice(0,24)+"…":msg; p.className="pill"+(type?" "+type:"");
   }
+  function show(obj){ document.getElementById("out").textContent = JSON.stringify(obj, null, 2); }
+  async function safeJson(r){ const t=await r.text(); try{return JSON.parse(t);}catch{return {ok:false,raw:t,status:r.status};} }
 
-  function setStatus(msg, type){
-    const s = document.getElementById("status");
-    const p = document.getElementById("pill");
-    s.textContent = msg;
-    s.className = "status-bar" + (type ? " " + type : "");
-    p.textContent = msg.length > 24 ? msg.slice(0,24)+"…" : msg;
-    p.className = "pill" + (type ? " " + type : "");
-  }
-
-  function show(obj){
-    document.getElementById("out").textContent = JSON.stringify(obj, null, 2);
-  }
-
-  async function safeJson(r){
-    const text = await r.text();
-    try { return JSON.parse(text); } catch { return { ok:false, raw:text }; }
-  }
-
-  // ---------- Init ----------
-  (function init(){
-    const params = new URLSearchParams(window.location.search);
-    const team = params.get("team_id") || params.get("team") || "";
-    if (team) {
-      localStorage.setItem("LAST_TEAM_ID", team);
-      setStatus("OAuth complete: " + team, "ok");
-      const url = new URL(window.location.href);
-      url.searchParams.delete("team_id");
-      url.searchParams.delete("team");
-      window.history.replaceState({}, "", url.toString());
-    } else {
-      setStatus("Idle");
+  window.addEventListener("message", async (event) => {
+    const data = event.data || {};
+    if (data.type === "slack_oauth_success") {
+      setStatus("Workspace connected","ok");
+      await loadWorkspaces(data.team_id || "");
+    } else if (data.type === "slack_oauth_error") {
+      show({ok:false, oauth_error:data.error});
+      setStatus("Connect failed","err");
     }
-    loadWorkspaces().catch(()=>{});
-  })();
+  });
 
-  // ---------- Actions ----------
   function connectSlack(){
     setStatus("Opening Slack OAuth…");
-    window.open(getApiBase() + "/install", "_blank", "noopener,noreferrer");
+    const win = window.open(getApiBase()+"/install", "slack_oauth_popup", "width=700,height=800,menubar=no,toolbar=no,location=yes,resizable=yes,scrollbars=yes,status=no");
+    if(!win) setStatus("Popup blocked","err");
   }
 
-  async function loadWorkspaces(){
+  async function loadWorkspaces(preferredTeamId=""){
     try{
       setStatus("Loading workspaces…");
-      const r = await fetch(getApiBase() + "/workspaces");
-      const data = await safeJson(r);
-      show(data);
-      const sel = document.getElementById("workspaceSelect");
-      sel.innerHTML = "";
-      const list = data.workspaces || [];
-      if (!data.ok) {
-        sel.innerHTML = '<option value="">— failed to load workspaces —</option>';
-        setStatus("Workspaces load failed", "err");
-        return;
-      }
-      if (list.length === 0) {
-        sel.innerHTML = '<option value="">— none connected yet —</option>';
-        setStatus("No workspaces connected");
-        return;
-      }
-      const last = localStorage.getItem("LAST_TEAM_ID") || "";
-      list.forEach(w => {
-        const opt = document.createElement("option");
-        opt.value = w.team_id;
-        opt.textContent = w.team_id + (w.team_name ? (" • " + w.team_name) : "");
-        if (w.team_id === last) opt.selected = true;
+      const r = await fetch(getApiBase()+"/workspaces");
+      const data = await safeJson(r); show(data);
+      const sel=document.getElementById("workspaceSelect");
+      const ch=document.getElementById("channelSelect");
+      sel.innerHTML=""; ch.innerHTML='<option value="">— Load channels first —</option>';
+      if(!data.ok){ sel.innerHTML='<option value="">— failed to load workspaces —</option>'; setStatus("Workspaces load failed","err"); return; }
+      const list=data.workspaces||[];
+      if(list.length===0){ sel.innerHTML='<option value="">— none connected yet —</option>'; setStatus("No workspaces connected","warn"); return; }
+      let found=false;
+      list.forEach((w,idx)=>{
+        const opt=document.createElement("option");
+        opt.value=w.team_id; opt.textContent=w.team_name?`${w.team_name} • ${w.team_id}`:w.team_id;
+        if((preferredTeamId && w.team_id===preferredTeamId) || (!preferredTeamId && idx===0)){ opt.selected=true; found=true; }
         sel.appendChild(opt);
       });
-      setStatus("Workspaces loaded", "ok");
-      if (sel.value) loadChannels();
-    }catch(e){
-      show({ ok:false, error:String(e) });
-      setStatus("Workspaces load failed", "err");
-    }
-  }
-
-  async function checkToken(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      if(!team_id){ setStatus("Select a workspace first", "warn"); return; }
-      setStatus("Checking token…");
-      const r = await fetch(getApiBase() + "/token/status?team_id=" + encodeURIComponent(team_id));
-      const data = await safeJson(r);
-      show(data);
-      if (data.ok && data.has_token) setStatus("Token OK", "ok");
-      else setStatus("Token missing", "warn");
-    }catch(e){
-      show({ ok:false, error:String(e) });
-      setStatus("Token check failed", "err");
-    }
-  }
-
-  async function loadChannels(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      if(!team_id) return;
-      setStatus("Loading channels…");
-      const r = await fetch(getApiBase() + "/channels?team_id=" + encodeURIComponent(team_id));
-      const data = await safeJson(r);
-      show(data);
-      const sel = document.getElementById("channelSelect");
-      sel.innerHTML = "";
-      if (!data.ok) {
-        sel.innerHTML = '<option value="">— failed to load channels —</option>';
-        setStatus("Channels load failed", "err");
-        return;
-      }
-      const channels = data.channels || [];
-      if (channels.length === 0) {
-        sel.innerHTML = '<option value="">— no channels returned —</option>';
-        setStatus("No channels", "warn");
-        return;
-      }
-      channels.forEach(c => {
-        const opt = document.createElement("option");
-        opt.value = c.id;
-        opt.textContent = "#" + c.name;
-        sel.appendChild(opt);
-      });
-      setStatus("Channels loaded", "ok");
-    }catch(e){
-      show({ ok:false, error:String(e) });
-      setStatus("Channels load failed", "err");
-    }
-  }
-
-  async function backfillOneChannel(team_id, channel_id){
-    let cursor = "", totalStored = 0;
-    while (true){
-      const url = getApiBase() + "/backfill-channel?team_id=" + encodeURIComponent(team_id) +
-        "&channel_id=" + encodeURIComponent(channel_id) + "&limit=200" +
-        (cursor ? "&cursor=" + encodeURIComponent(cursor) : "");
-      const r = await fetch(url, { method:"POST" });
-      const data = await safeJson(r);
-      if (!data.ok) return { ok:false, error:data };
-      totalStored += (data.stored_new || 0);
-      if (!data.has_more) break;
-      cursor = data.next_cursor || "";
-      await new Promise(res => setTimeout(res, 350));
-    }
-    return { ok:true, stored: totalStored };
-  }
-
-  async function joinSelectedAndBackfill(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      const channel_id = document.getElementById("channelSelect").value;
-      if(!team_id || !channel_id){ setStatus("Select workspace + channel first", "warn"); return; }
-      setStatus("Joining channel…");
-      const r = await fetch(getApiBase() + "/join-channel?team_id=" + encodeURIComponent(team_id) +
-        "&channel_id=" + encodeURIComponent(channel_id), { method:"POST" });
-      const j = await safeJson(r);
-      if(!j.ok){ show(j); setStatus("Join failed", "err"); return; }
-      setStatus("Backfilling…");
-      const bf = await backfillOneChannel(team_id, channel_id);
-      show({ join: j, backfill: bf });
-      if (bf.ok) setStatus("Done — " + bf.stored + " stored", "ok");
-      else setStatus("Backfill failed", "err");
-    }catch(e){
-      show({ ok:false, error:String(e) });
-      setStatus("Failed", "err");
-    }
-  }
-
-  async function joinAllAndBackfill(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      if(!team_id){ setStatus("Select a workspace first", "warn"); return; }
-      setStatus("Joining all public channels…");
-      const r = await fetch(getApiBase() + "/join-all-public?team_id=" + encodeURIComponent(team_id), { method:"POST" });
-      const j = await safeJson(r);
-      if(!j.ok){ show(j); setStatus("Join-all failed", "err"); return; }
-      const sel = document.getElementById("channelSelect");
-      const channelIds = Array.from(sel.options).map(o => o.value).filter(v => v);
-      if(!channelIds.length){ show(j); setStatus("No channels loaded", "warn"); return; }
-      let total = 0, results = [];
-      for (let i = 0; i < channelIds.length; i++){
-        setStatus(`Backfilling ${i+1}/${channelIds.length}…`);
-        const bf = await backfillOneChannel(team_id, channelIds[i]);
-        results.push({ channel: channelIds[i], ...bf });
-        if (bf.ok) total += bf.stored;
-        await new Promise(res => setTimeout(res, 400));
-      }
-      show({ join_all: j, backfill_all: { total_stored: total, results }});
-      setStatus("Done — " + total + " total stored", "ok");
-    }catch(e){
-      show({ ok:false, error:String(e) });
-      setStatus("Failed", "err");
-    }
-  }
-
-  async function loadMessagesFromDB(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      const channel_id = document.getElementById("channelSelect").value;
-      if(!team_id || !channel_id){ setStatus("Select workspace + channel first", "warn"); return; }
-      setStatus("Loading from DB…");
-      const url = getApiBase() + "/db-messages?team_id=" + encodeURIComponent(team_id) +
-        "&channel_id=" + encodeURIComponent(channel_id) + "&limit=50";
-      const r = await fetch(url);
-      const data = await safeJson(r);
-      show(data);
-      if (data.ok) setStatus("Loaded from DB", "ok");
-      else setStatus("DB load failed", "err");
-    }catch(e){
-      show({ ok:false, error:String(e) });
-      setStatus("DB load failed", "err");
-    }
+      if(!found && sel.options.length>0) sel.selectedIndex=0;
+      setStatus("Workspaces loaded","ok");
+      if(sel.value) await loadChannels();
+    }catch(e){ show({ok:false,error:String(e)}); setStatus("Workspaces load failed","err"); }
   }
 
   async function disconnectWorkspace(){
     try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      if(!team_id) return;
+      const sel=document.getElementById("workspaceSelect");
+      const team_id=sel.value;
+      if(!team_id){ setStatus("Select workspace first","warn"); return; }
       if(!confirm("Disconnect this workspace? This will revoke the token and delete the secret.")) return;
       setStatus("Disconnecting…");
-      const r = await fetch(getApiBase() + "/workspaces/" + encodeURIComponent(team_id), { method:"DELETE" });
-      const data = await safeJson(r);
-      show(data);
-      setStatus("Disconnected", "ok");
+      const r = await fetch(getApiBase()+"/workspaces/"+encodeURIComponent(team_id), {method:"DELETE"});
+      const data = await safeJson(r); show(data);
+      if(!data.ok){ setStatus("Disconnect failed","err"); return; }
+      setStatus("Disconnected","ok");
       await loadWorkspaces();
-    }catch(e){
-      show({ ok:false, error:String(e) });
-      setStatus("Disconnect failed", "err");
-    }
+      window.location.reload();
+    }catch(e){ show({ok:false,error:String(e)}); setStatus("Disconnect failed","err"); }
   }
 
-  // ── Search ────────────────────────────────────────────────────────────────
+  async function checkToken(){
+    try{
+      const team_id=document.getElementById("workspaceSelect").value;
+      if(!team_id){ setStatus("Select workspace first","warn"); return; }
+      setStatus("Checking token…");
+      const r=await fetch(getApiBase()+"/token/status?team_id="+encodeURIComponent(team_id));
+      const data=await safeJson(r); show(data);
+      setStatus(data.ok && data.has_token ? "Token OK" : "Token missing", data.ok && data.has_token ? "ok" : "warn");
+    }catch(e){ show({ok:false,error:String(e)}); setStatus("Token check failed","err"); }
+  }
+
+  async function loadChannels(){
+    try{
+      const team_id=document.getElementById("workspaceSelect").value;
+      if(!team_id) return;
+      setStatus("Loading channels…");
+      const r=await fetch(getApiBase()+"/channels?team_id="+encodeURIComponent(team_id));
+      const data=await safeJson(r); show(data);
+      const sel=document.getElementById("channelSelect"); sel.innerHTML="";
+      if(!data.ok){ sel.innerHTML='<option value="">— failed to load channels —</option>'; setStatus("Channels load failed","err"); return; }
+      const channels=data.channels||[];
+      if(channels.length===0){ sel.innerHTML='<option value="">— no channels returned —</option>'; setStatus("No channels","warn"); return; }
+      channels.forEach(c=>{ const opt=document.createElement("option"); opt.value=c.id; opt.textContent="#"+c.name; sel.appendChild(opt); });
+      setStatus("Channels loaded","ok");
+    }catch(e){ show({ok:false,error:String(e)}); setStatus("Channels load failed","err"); }
+  }
+
+  async function backfillOneChannel(team_id, channel_id){
+    let cursor="", totalStored=0;
+    while(true){
+      const url=getApiBase()+"/backfill-channel?team_id="+encodeURIComponent(team_id)+"&channel_id="+encodeURIComponent(channel_id)+"&limit=200"+(cursor?"&cursor="+encodeURIComponent(cursor):"");
+      const r=await fetch(url,{method:"POST"}); const data=await safeJson(r);
+      if(!data.ok) return {ok:false,error:data};
+      totalStored += (data.stored_new || 0);
+      if(!data.has_more) break;
+      cursor = data.next_cursor || "";
+      await new Promise(res=>setTimeout(res,350));
+    }
+    return {ok:true, stored:totalStored};
+  }
+
+  async function joinSelectedAndBackfill(){
+    try{
+      const team_id=document.getElementById("workspaceSelect").value;
+      const channel_id=document.getElementById("channelSelect").value;
+      if(!team_id || !channel_id){ setStatus("Select workspace + channel first","warn"); return; }
+      setStatus("Joining channel…");
+      const r=await fetch(getApiBase()+"/join-channel?team_id="+encodeURIComponent(team_id)+"&channel_id="+encodeURIComponent(channel_id),{method:"POST"});
+      const j=await safeJson(r); if(!j.ok){ show(j); setStatus("Join failed","err"); return; }
+      setStatus("Backfilling…");
+      const bf=await backfillOneChannel(team_id, channel_id);
+      show({join:j, backfill:bf});
+      setStatus(bf.ok ? "Done" : "Backfill failed", bf.ok ? "ok" : "err");
+    }catch(e){ show({ok:false,error:String(e)}); setStatus("Join/backfill failed","err"); }
+  }
+
+  async function joinAllAndBackfill(){
+    try{
+      const team_id=document.getElementById("workspaceSelect").value;
+      if(!team_id){ setStatus("Select workspace first","warn"); return; }
+      setStatus("Joining all public…");
+      const r=await fetch(getApiBase()+"/join-all-public?team_id="+encodeURIComponent(team_id),{method:"POST"});
+      const j=await safeJson(r); if(!j.ok){ show(j); setStatus("Join all failed","err"); return; }
+      await loadChannels();
+      const channels=(await safeJson(await fetch(getApiBase()+"/channels?team_id="+encodeURIComponent(team_id)))).channels || [];
+      const results=[];
+      for(const c of channels){
+        setStatus("Backfilling #"+(c.name||c.id)+"…");
+        const bf=await backfillOneChannel(team_id, c.id);
+        results.push({channel_id:c.id, channel_name:c.name, backfill:bf});
+      }
+      show({join_all:j, results}); setStatus("All public channels processed","ok");
+    }catch(e){ show({ok:false,error:String(e)}); setStatus("Join all failed","err"); }
+  }
+
+  async function loadMessagesFromDB(){
+    try{
+      const team_id=document.getElementById("workspaceSelect").value;
+      const channel_id=document.getElementById("channelSelect").value;
+      if(!team_id || !channel_id){ setStatus("Select workspace + channel first","warn"); return; }
+      setStatus("Loading DB messages…");
+      const r=await fetch(getApiBase()+"/db-messages?team_id="+encodeURIComponent(team_id)+"&channel_id="+encodeURIComponent(channel_id)+"&limit=50");
+      const data=await safeJson(r); show(data); setStatus(data.ok?"DB messages loaded":"DB load failed", data.ok?"ok":"err");
+    }catch(e){ show({ok:false,error:String(e)}); setStatus("DB load failed","err"); }
+  }
+
   async function searchMessages(){
-    try {
-      const team_id    = document.getElementById("workspaceSelect").value;
-      const channel_id = document.getElementById("channelSelect").value;
-      if (!team_id || !channel_id) { setStatus("Select workspace + channel first", "warn"); return; }
-
-      const q       = document.getElementById("keyword").value.trim();
-      const from    = document.getElementById("fromDate").value;
-      const to      = document.getElementById("toDate").value;
-      const user_id = document.getElementById("searchUserId").value.trim();
-
-      let url = getApiBase() + "/search"
-        + "?team_id="    + encodeURIComponent(team_id)
-        + "&channel_id=" + encodeURIComponent(channel_id);
-      if (q)       url += "&q="       + encodeURIComponent(q);
-      if (from)    url += "&from="    + encodeURIComponent(from);
-      if (to)      url += "&to="      + encodeURIComponent(to);
-      if (user_id) url += "&user_id=" + encodeURIComponent(user_id);
-
+    try{
+      const team_id=document.getElementById("workspaceSelect").value;
+      const channel_id=document.getElementById("channelSelect").value;
+      const q=document.getElementById("q").value.trim();
+      const from=document.getElementById("fromDate").value;
+      const to=document.getElementById("toDate").value;
+      if(!team_id || !channel_id){ setStatus("Select workspace + channel first","warn"); return; }
+      const params=new URLSearchParams({team_id, channel_id, q, top_k:"10"}); if(from) params.set("from", from); if(to) params.set("to", to);
       setStatus("Searching…");
-      const r    = await fetch(url);
-      const data = await safeJson(r);
-      show(data);
-
-      if (data.ok) {
-        const n = data.count || 0;
-        setStatus(n > 0 ? `Found ${n} message${n===1?"":"s"}` : "No results found", n > 0 ? "ok" : "warn");
-      } else {
-        setStatus("Search failed", "err");
-      }
-    } catch(e) {
-      show({ ok:false, error: String(e) });
-      setStatus("Search error", "err");
-    }
+      const r=await fetch(getApiBase()+"/search?"+params.toString()); const data=await safeJson(r); show(data); setStatus(data.ok?"Search done":"Search failed", data.ok?"ok":"err");
+    }catch(e){ show({ok:false,error:String(e)}); setStatus("Search failed","err"); }
   }
 
-  function clearSearch(){
-    document.getElementById("keyword").value     = "";
-    document.getElementById("fromDate").value    = "";
-    document.getElementById("toDate").value      = "";
-    document.getElementById("searchUserId").value = "";
-    show({});
-    setStatus("Cleared");
-  }
-
-  // ── Chat (Day 2 — endpoint wired, shows helpful message until backend ready) ─
   async function askChat(){
-    try {
-      const team_id    = document.getElementById("workspaceSelect").value;
-      const channel_id = document.getElementById("channelSelect").value;
-      const question   = document.getElementById("chatQuestion").value.trim();
-
-      if (!team_id || !channel_id) { setStatus("Select workspace + channel first", "warn"); return; }
-      if (!question)               { setStatus("Enter a question first", "warn"); return; }
-      if (question.length > 500)   { setStatus("Question too long (max 500 chars)", "warn"); return; }
-
-      const btn = document.getElementById("askBtn");
-      btn.disabled   = true;
-      btn.textContent = "Asking…";
-      document.getElementById("chatAnswer").style.display = "none";
+    try{
+      const team_id=document.getElementById("workspaceSelect").value;
+      const channel_id=document.getElementById("channelSelect").value;
+      const question=document.getElementById("question").value.trim();
+      const from_date=document.getElementById("fromDate").value;
+      const to_date=document.getElementById("toDate").value;
+      if(!team_id || !channel_id || !question){ setStatus("Select workspace + channel and type question","warn"); return; }
       setStatus("Thinking…");
-
-      const r = await fetch(getApiBase() + "/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ team_id, channel_id, question }),
-      });
-      const data = await safeJson(r);
-      show(data);
-
-      if (data.ok && data.answer) {
-        // ── Parse + render answer ─────────────────────────────────
-        var raw = data.answer || "";
-
-        // Simple line-by-line section parser — no complex regex
-        function parseSection(text, label) {
-          var lines = text.split("\n");
-          var collecting = false;
-          var result = [];
-          var allLabels = ["answer","key points","action items","citations"];
-          for (var i = 0; i < lines.length; i++) {
-            var line = lines[i];
-            var lineLower = line.toLowerCase();
-            var startsWithLabel = allLabels.some(function(l){ return lineLower.startsWith(l + ":"); });
-            if (lineLower.startsWith(label.toLowerCase() + ":")) {
-              collecting = true;
-              var rest = line.substring(line.indexOf(":") + 1).trim();
-              if (rest) result.push(rest);
-            } else if (collecting && startsWithLabel) {
-              break;
-            } else if (collecting) {
-              result.push(line);
-            }
-          }
-          return result.join("\n").trim();
-        }
-
-        function esc(s) {
-          return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-        }
-
-        var answerText  = parseSection(raw, "Answer") || raw;
-        var keyPoints   = parseSection(raw, "Key points");
-        var actionItems = parseSection(raw, "Action items");
-
-        var html = '<div style="font-size:13px;color:var(--text);line-height:1.7;">'
-          + esc(answerText).split("\n").join("<br>") + '</div>';
-
-        if (keyPoints && keyPoints.toLowerCase() !== "none" && keyPoints.trim() !== "") {
-          var bullets = keyPoints.split("\n")
-            .map(function(b){ return b.replace(/^[\*\-]\s*/,"").trim(); })
-            .filter(function(b){ return b.length > 0; });
-          html += '<div style="margin-top:12px;">'
-            + '<div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Key Points</div>';
-          for (var i=0; i<bullets.length; i++) {
-            html += '<div style="display:flex;gap:6px;margin-bottom:4px;font-size:13px;color:var(--text-soft);">'
-              + '<span style="color:var(--accent);flex-shrink:0;">&#xB7;</span>'
-              + '<span>' + esc(bullets[i]) + '</span></div>';
-          }
-          html += '</div>';
-        }
-
-        if (actionItems && actionItems.toLowerCase() !== "none" && actionItems.trim() !== "") {
-          html += '<div style="margin-top:12px;padding:8px 12px;border-radius:6px;'
-            + 'background:rgba(155,127,232,0.07);border:1px solid rgba(155,127,232,0.15);">'
-            + '<div style="font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;'
-            + 'letter-spacing:.04em;margin-bottom:4px;">Action Items</div>'
-            + '<div style="font-size:13px;color:var(--text-soft);">'
-            + esc(actionItems).split("\n").join("<br>") + '</div></div>';
-        }
-
-        document.getElementById("chatAnswerText").innerHTML = html;
-        // ── Render citations ───────────────────────────────────────
-        const citBox = document.getElementById("chatCitations");
-        if (data.citations && data.citations.length > 0) {
-          // Strip Slack mrkdwn links like <url|text> → just text
-          function stripSlack(t) {
-            return (t||"").replace(/<https?:\/\/[^|>]+\|([^>]+)>/g,"$1")
-                          .replace(/<https?:\/\/[^>]+>/g,"[link]")
-                          .replace(/[*_]/g,"");
-          }
-          citBox.innerHTML = `
-            <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
-              <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">
-                Sources (${data.citations.length})
-              </div>
-              ${data.citations.map((c,i) => `
-                <div style="border-left:2px solid var(--accent);padding:6px 10px;margin-bottom:8px;border-radius:0 6px 6px 0;background:var(--surface2);">
-                  <div style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:4px;">
-                    [${i+1}] ${c.timestamp_human || ""} · ${c.username || c.user_id || "unknown"}
-                  </div>
-                  <div style="font-size:12px;color:var(--text-soft);line-height:1.5;">
-                    ${stripSlack(c.snippet || c.text || "").slice(0,200)}${(c.snippet||"").length > 200 ? "…" : ""}
-                  </div>
-                </div>`).join("")}
-            </div>`;
-        } else {
-          citBox.innerHTML = "";
-        }
-
-        document.getElementById("chatAnswer").style.display = "block";
-        setStatus("Answer ready", "ok");
-        // Also clear raw JSON from output panel — show clean UI only
-        show({ ok: true, question: data.question, retrieved: data.retrieved_count });
-      } else if (r.status === 404 || r.status === 501) {
-        setStatus("/api/chat not built yet — coming Day 2!", "warn");
-        show({ note: "Day 2 task: build /api/chat in app/routers/chat.py" });
-      } else {
-        setStatus("Chat failed", "err");
-      }
-    } catch(e) {
-      show({ ok:false, error: String(e) });
-      setStatus("Chat error", "err");
-    } finally {
-      const btn = document.getElementById("askBtn");
-      btn.disabled    = false;
-      btn.textContent = "Ask";
-    }
+      const r=await fetch(getApiBase()+"/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({team_id, channel_id, question, from_date:from_date||null, to_date:to_date||null, top_k:10})});
+      const data=await safeJson(r); show(data); setStatus(data.ok?"Answer ready":"Chat failed", data.ok?"ok":"err");
+    }catch(e){ show({ok:false,error:String(e)}); setStatus("Chat failed","err"); }
   }
 
-  // textarea: Ctrl+Enter / Cmd+Enter to submit
-  document.addEventListener("DOMContentLoaded", () => {
-    const ta = document.getElementById("chatQuestion");
-    if (ta) {
-      ta.addEventListener("keydown", e => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") askChat();
-      });
-    }
-  });
+  loadWorkspaces();
 </script>
-
 </body>
 </html>
