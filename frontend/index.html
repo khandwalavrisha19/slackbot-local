@@ -6,61 +6,282 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <style>
+<style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root { --bg:#eef0f7; --surface:#f7f5fc; --surface2:#ece9f5; --border:rgba(140,120,200,.13); --border-hover:rgba(140,120,200,.24); --text:#2c2840; --text-muted:#a49dbf; --text-soft:#7b73a0; --accent:#9b7fe8; --accent-glow:rgba(155,127,232,.14); --danger:#e07a8a; --danger-bg:rgba(224,122,138,.09); --radius:10px; --radius-sm:6px; }
-    body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; font-size:14px; line-height:1.5; }
-    body::before { content:''; position:fixed; inset:0; background:radial-gradient(ellipse 60% 40% at 15% 10%, rgba(185,160,245,.18) 0%, transparent 65%), radial-gradient(ellipse 50% 40% at 85% 80%, rgba(130,210,190,.13) 0%, transparent 65%), radial-gradient(ellipse 40% 30% at 70% 20%, rgba(245,170,185,.10) 0%, transparent 60%); pointer-events:none; z-index:0; }
-    header { position:sticky; top:0; z-index:100; display:flex; align-items:center; justify-content:space-between; padding:0 28px; height:56px; background:rgba(238,240,247,.85); backdrop-filter:blur(16px); border-bottom:1px solid var(--border); }
-    .header-left { display:flex; align-items:center; gap:10px; }
-    .logo-icon { width:26px; height:26px; background:var(--accent); border-radius:7px; display:flex; align-items:center; justify-content:center; }
-    h1 { font-size:14px; font-weight:500; }
-    .pill { font-size:11px; font-family:'DM Mono',monospace; font-weight:500; padding:4px 10px; border-radius:999px; border:1px solid var(--border); background:var(--surface); color:var(--text-soft); }
-    .pill.ok { color:#3d9e7e; } .pill.warn { color:#9e7820; } .pill.err { color:var(--danger); }
-    .wrap { position:relative; z-index:1; display:grid; grid-template-columns:360px 1fr; gap:16px; padding:20px 24px; max-width:1200px; margin:0 auto; }
-    .sidebar { display:flex; flex-direction:column; gap:10px; }
-    .panel, .output-panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
-    .panel-header, .output-header { display:flex; align-items:center; gap:8px; padding:12px 16px; border-bottom:1px solid var(--border); }
-    .output-header { justify-content:space-between; }
-    .step-badge { font-size:10px; font-family:'DM Mono',monospace; color:var(--text-muted); background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:2px 6px; }
-    .panel-title, .output-title { font-size:12px; font-weight:600; color:var(--text-soft); letter-spacing:.04em; text-transform:uppercase; }
-    .panel-body { padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
-    .hint { font-size:12px; color:var(--text-muted); }
-    label { display:block; font-size:11px; font-weight:500; color:var(--text-muted); letter-spacing:.04em; text-transform:uppercase; margin-bottom:5px; }
-    input, select, textarea { width:100%; padding:9px 12px; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--bg); color:var(--text); font-family:'DM Sans',sans-serif; font-size:13px; outline:none; }
-    .btn-group { display:flex; flex-wrap:wrap; gap:6px; }
-    button { padding:7px 13px; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--surface2); color:var(--text-soft); cursor:pointer; font-size:12px; font-weight:500; }
-    button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-    button.danger { color:var(--danger); background:transparent; border-color:rgba(224,122,138,.25); }
-    .row-2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-    .output-panel { position:sticky; top:76px; height:calc(100vh - 96px); display:flex; flex-direction:column; }
-    .output-body { flex:1; overflow-y:auto; padding:14px 16px; }
-    pre { font-family:'DM Mono',monospace; font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
-    .status-bar.ok { color:#3d9e7e; } .status-bar.warn { color:#9e7820; } .status-bar.err { color:var(--danger); }
-    @media (max-width:900px){ .wrap{grid-template-columns:1fr;} .output-panel{position:static;height:auto;min-height:300px;} }
+
+    :root {
+      --bg: #eef0f7;
+      --surface: #f7f5fc;
+      --surface2: #ece9f5;
+      --border: rgba(140,120,200,0.13);
+      --border-hover: rgba(140,120,200,0.24);
+      --text: #2c2840;
+      --text-muted: #a49dbf;
+      --text-soft: #7b73a0;
+      --accent: #9b7fe8;
+      --accent-glow: rgba(155,127,232,0.14);
+      --danger: #e07a8a;
+      --danger-bg: rgba(224,122,138,0.09);
+      --success: #6dbfa0;
+      --radius: 10px;
+      --radius-sm: 6px;
+    }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 60% 40% at 15% 10%, rgba(185,160,245,0.18) 0%, transparent 65%),
+        radial-gradient(ellipse 50% 40% at 85% 80%, rgba(130,210,190,0.13) 0%, transparent 65%),
+        radial-gradient(ellipse 40% 30% at 70% 20%, rgba(245,170,185,0.10) 0%, transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      height: 56px;
+      background: rgba(238,240,247,0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header-left { display: flex; align-items: center; gap: 10px; }
+
+    .logo-icon {
+      width: 26px; height: 26px;
+      background: var(--accent);
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .logo-icon svg { display: block; }
+
+    h1 { font-size: 14px; font-weight: 500; color: var(--text); letter-spacing: -0.01em; }
+
+    .pill {
+      font-size: 11px;
+      font-family: 'DM Mono', monospace;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-soft);
+      transition: all 0.3s ease;
+      letter-spacing: 0.02em;
+    }
+    .pill.ok   { border-color: rgba(109,191,160,0.35); color: #3d9e7e; background: rgba(109,191,160,0.12); }
+    .pill.warn { border-color: rgba(220,170,80,0.35);  color: #9e7820; background: rgba(220,170,80,0.10); }
+    .pill.err  { border-color: rgba(224,122,138,0.35); color: var(--danger); background: var(--danger-bg); }
+    .session-badge {
+      font-size: 11px; font-family: 'DM Mono', monospace;
+      color: var(--text-muted); letter-spacing: 0.02em;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .session-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--success); flex-shrink: 0;
+      box-shadow: 0 0 0 2px rgba(109,191,160,0.25);
+    }
+    button.logout-btn {
+      padding: 4px 10px; font-size: 11px;
+      border-color: rgba(224,122,138,0.2); color: var(--text-muted);
+      background: transparent;
+    }
+    button.logout-btn:hover { color: var(--danger); border-color: rgba(224,122,138,0.4); background: var(--danger-bg); }
+
+
+    .wrap {
+      position: relative; z-index: 1;
+      display: grid; grid-template-columns: 360px 1fr;
+      gap: 16px; padding: 20px 24px;
+      max-width: 1200px; margin: 0 auto;
+    }
+
+    .sidebar { display: flex; flex-direction: column; gap: 10px; }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: border-color 0.2s;
+      animation: fadeIn 0.3s ease both;
+    }
+    .panel:nth-child(1) { animation-delay: 0.00s; }
+    .panel:nth-child(2) { animation-delay: 0.07s; }
+    .panel:nth-child(3) { animation-delay: 0.14s; }
+    .panel:hover { border-color: var(--border-hover); }
+
+    .panel-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .step-badge {
+      font-size: 10px; font-family: 'DM Mono', monospace; font-weight: 500;
+      color: var(--text-muted); background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 2px 6px; letter-spacing: 0.05em;
+    }
+
+    .panel-title {
+      font-size: 12px; font-weight: 600; color: var(--text-soft);
+      letter-spacing: 0.03em; text-transform: uppercase;
+    }
+
+    .panel-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+
+    .hint { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
+
+    label {
+      display: block; font-size: 11px; font-weight: 500;
+      color: var(--text-muted); letter-spacing: 0.04em;
+      text-transform: uppercase; margin-bottom: 5px;
+    }
+
+    input, select {
+      width: 100%; padding: 9px 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--bg); color: var(--text);
+      font-family: 'DM Sans', sans-serif; font-size: 13px;
+      outline: none; transition: border-color 0.2s, box-shadow 0.2s;
+      appearance: none; -webkit-appearance: none;
+    }
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23a49dbf' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px;
+    }
+    input:focus, select:focus {
+      border-color: rgba(155,127,232,0.45);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    input::placeholder { color: var(--text-muted); font-size: 12px; }
+
+    .btn-group { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    button {
+      padding: 7px 13px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border); background: var(--surface2);
+      color: var(--text-soft); cursor: pointer;
+      font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500;
+      transition: all 0.15s ease; white-space: nowrap; letter-spacing: 0.01em;
+    }
+    button:hover { background: rgba(155,127,232,0.08); border-color: var(--border-hover); color: var(--text); }
+    button:active { transform: scale(0.98); }
+
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.primary:hover { background: #b096f0; border-color: #b096f0; }
+
+    button.danger { border-color: rgba(224,122,138,0.25); color: var(--danger); background: transparent; }
+    button.danger:hover { background: var(--danger-bg); border-color: rgba(224,122,138,0.45); }
+
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .field { display: flex; flex-direction: column; }
+
+    .output-panel {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); display: flex; flex-direction: column;
+      position: sticky; top: 76px; height: calc(100vh - 96px); overflow: hidden;
+    }
+    .output-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    .output-title { font-size: 12px; font-weight: 600; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.04em; }
+
+    .status-bar { font-size: 12px; font-family: 'DM Mono', monospace; color: var(--text-muted); transition: color 0.3s; }
+    .status-bar.ok   { color: #3d9e7e; }
+    .status-bar.err  { color: var(--danger); }
+    .status-bar.warn { color: #9e7820; }
+
+    .output-body { flex: 1; overflow-y: auto; padding: 14px 16px; }
+    .output-body::-webkit-scrollbar { width: 4px; }
+    .output-body::-webkit-scrollbar-track { background: transparent; }
+    .output-body::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 2px; }
+
+    pre {
+      font-family: 'DM Mono', monospace; font-size: 12px;
+      line-height: 1.65; color: var(--text-soft);
+      white-space: pre-wrap; word-break: break-word;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 900px) {
+      .wrap { grid-template-columns: 1fr; }
+      .output-panel { position: static; height: auto; min-height: 300px; }
+    }
   </style>
 </head>
 <body>
+
 <header>
   <div class="header-left">
-    <div class="logo-icon"></div>
+    <div class="logo-icon">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <rect x="2" y="2" width="4" height="4" rx="1" fill="white" opacity="0.95"/>
+        <rect x="8" y="2" width="4" height="4" rx="1" fill="white" opacity="0.65"/>
+        <rect x="2" y="8" width="4" height="4" rx="1" fill="white" opacity="0.65"/>
+        <rect x="8" y="8" width="4" height="4" rx="1" fill="white" opacity="0.95"/>
+      </svg>
+    </div>
     <h1>Slack Chatbot Dashboard</h1>
   </div>
-  <span class="pill" id="pill">Idle</span>
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div class="session-badge" id="sessionBadge" style="display:none;">
+      <span class="session-dot"></span>
+      <span id="sessionId" title="Your session ID">···</span>
+    </div>
+    <button class="logout-btn" id="logoutBtn" onclick="logout()" style="display:none;">Sign out</button>
+    <span class="pill" id="pill">Idle</span>
+  </div>
 </header>
+
 <div class="wrap">
   <div class="sidebar">
+
+    <!-- Connect -->
     <div class="panel">
-      <div class="panel-header"><span class="step-badge">01</span><span class="panel-title">Connect</span></div>
+      <div class="panel-header">
+        <span class="step-badge">01</span>
+        <span class="panel-title">Connect</span>
+      </div>
       <div class="panel-body">
-        <p class="hint">Connect a Slack workspace via OAuth. The workspace list updates automatically.</p>
+        <p class="hint">Connect a Slack workspace via OAuth. The UI will auto-select the workspace after install.</p>
         <div class="btn-group">
           <button class="primary" onclick="connectSlack()">Connect Slack</button>
-          <button onclick="refreshNow()">Refresh</button>
+          <button onclick="location.reload()">Refresh</button>
         </div>
-        <div>
+        <div class="field">
           <label>Workspace</label>
-          <select id="workspaceSelect" onchange="loadChannels()"><option value="">— No workspaces loaded —</option></select>
+          <select id="workspaceSelect" onchange="loadChannels()">
+            <option value="">— No workspaces loaded —</option>
+          </select>
         </div>
         <div class="btn-group">
           <button onclick="loadWorkspaces()">Load Workspaces</button>
@@ -69,10 +290,20 @@
         </div>
       </div>
     </div>
+
+    <!-- Channel -->
     <div class="panel">
-      <div class="panel-header"><span class="step-badge">02</span><span class="panel-title">Channel</span></div>
+      <div class="panel-header">
+        <span class="step-badge">02</span>
+        <span class="panel-title">Channel</span>
+      </div>
       <div class="panel-body">
-        <div><label>Channel</label><select id="channelSelect"><option value="">— Load channels first —</option></select></div>
+        <div class="field">
+          <label>Channel</label>
+          <select id="channelSelect">
+            <option value="">— Load channels first —</option>
+          </select>
+        </div>
         <div class="btn-group">
           <button onclick="joinSelectedAndBackfill()">Join + Backfill</button>
           <button onclick="joinAllAndBackfill()">Join All Public</button>
@@ -80,21 +311,85 @@
         </div>
       </div>
     </div>
+
+    <!-- Search -->
     <div class="panel">
-      <div class="panel-header"><span class="step-badge">03</span><span class="panel-title">Search Messages</span></div>
+      <div class="panel-header">
+        <span class="step-badge">03</span>
+        <span class="panel-title">Search Messages</span>
+      </div>
       <div class="panel-body">
-        <div><label>Keyword</label><input id="keyword" placeholder="e.g. deployment error" /></div>
-        <div class="row-2"><div><label>From</label><input id="fromDate" type="date" /></div><div><label>To</label><input id="toDate" type="date" /></div></div>
-        <div><label>User ID</label><input id="searchUserId" placeholder="e.g. U012AB3CD" /></div>
-        <div class="btn-group"><button class="primary" onclick="searchMessages()">Search</button><button onclick="clearSearch()">Clear</button></div>
+        <p class="hint">Search your Slack messages stored in DynamoDB. Add filters to narrow results.</p>
+        <div class="field">
+          <label>Keyword</label>
+          <input id="keyword" placeholder="e.g. deployment error" />
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label>From</label>
+            <input id="fromDate" type="date" />
+          </div>
+          <div class="field">
+            <label>To</label>
+            <input id="toDate" type="date" />
+          </div>
+        </div>
+        <div class="field">
+          <label>User ID (optional)</label>
+          <input id="searchUserId" placeholder="e.g. U012AB3CD" />
+        </div>
+        <div class="btn-group">
+          <button class="primary" onclick="searchMessages()">Search</button>
+          <button onclick="clearSearch()">Clear</button>
+        </div>
       </div>
     </div>
+
+    <!-- Chat (Day 2 — input ready, endpoint wired when backend exists) -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="step-badge">04</span>
+        <span class="panel-title">Ask AI</span>
+      </div>
+      <div class="panel-body">
+        <p class="hint">Ask a question about your Slack messages. The AI answers using only your data.</p>
+        <div class="field">
+          <label>Your Question</label>
+          <textarea id="chatQuestion"
+            placeholder="e.g. What did we decide about the API design?"
+            style="width:100%;min-height:72px;resize:vertical;padding:9px 12px;
+                   border-radius:6px;border:1px solid var(--border);
+                   background:var(--bg);color:var(--text);
+                   font-family:'DM Sans',sans-serif;font-size:13px;
+                   outline:none;transition:border-color .2s,box-shadow .2s;"></textarea>
+        </div>
+        <div class="btn-group">
+          <button class="primary" id="askBtn" onclick="askChat()">Ask</button>
+        </div>
+        <div id="chatAnswer" style="display:none;margin-top:8px;padding:10px 12px;
+             border-radius:6px;background:var(--surface2);border:1px solid var(--border);">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);
+               text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Answer</div>
+          <div id="chatAnswerText" style="font-size:13px;color:var(--text);line-height:1.6;"></div>
+          <div id="chatCitations" style="margin-top:10px;"></div>
+        </div>
+      </div>
+    </div>
+
   </div>
+
+  <!-- Output -->
   <div class="output-panel">
-    <div class="output-header"><span class="output-title">Output</span><span class="status-bar" id="status">Idle</span></div>
-    <div class="output-body"><pre id="out">{}</pre></div>
+    <div class="output-header">
+      <span class="output-title">Output</span>
+      <span class="status-bar" id="status">Idle</span>
+    </div>
+    <div class="output-body">
+      <pre id="out">{}</pre>
+    </div>
   </div>
 </div>
+
 <script>
   let oauthPopup = null;
 
