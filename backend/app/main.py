@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1").strip()
-SECRET_PREFIX = os.getenv("SECRET_PREFIX", "slackbot").strip()
+SECRET_PREFIX = os.getenv("SECRET_PREFIX", "").strip()
 CLIENT_ID = os.getenv("SLACK_CLIENT_ID", "").strip()
 CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET", "").strip()
 REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI", "").strip()
@@ -62,7 +62,6 @@ FRONTEND_PATH = Path(os.getenv("FRONTEND_PATH", str(frontend_default)))
 def secret_name(team_id: str) -> str:
     return f"{SECRET_PREFIX}/{team_id}"
 
-
 def upsert_secret(name: str, payload: dict) -> None:
     body = json.dumps(payload)
     try:
@@ -72,7 +71,6 @@ def upsert_secret(name: str, payload: dict) -> None:
             secrets.put_secret_value(SecretId=name, SecretString=body)
         else:
             raise
-
 
 def read_secret(name: str) -> Optional[dict]:
     try:
@@ -215,69 +213,32 @@ def install():
 
 @app.get("/oauth/callback")
 def oauth_callback(code: str | None = None, error: str | None = None, state: str | None = None):
-    def popup_response(message_type: str, payload: dict, status_code: int = 200):
-        payload_json = json.dumps({"type": message_type, **payload})
-        return HTMLResponse(
-            f"""
-            <html><body style='font-family:Arial,sans-serif;padding:20px'>
-            <script>
-            if (window.opener) {{
-              window.opener.postMessage({payload_json}, "*");
-            }}
-            window.close();
-            </script>
-            <p>You can close this window.</p>
-            </body></html>
-            """,
-            status_code=status_code,
-        )
-
     if error:
-        return popup_response("slack_oauth_error", {"error": error}, 400)
+        return HTMLResponse(f"<h3>Slack install failed</h3><p>{error}</p>", status_code=400)
     if not code:
-        return popup_response("slack_oauth_error", {"error": "missing_code"}, 400)
-
-    r = requests.post(
-        "https://slack.com/api/oauth.v2.access",
-        data={
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "code": code,
-            "redirect_uri": REDIRECT_URI,
-        },
-        timeout=20,
-    )
+        return HTMLResponse("<h3>Slack install failed</h3><p>Missing code</p>", status_code=400)
+    r    = requests.post("https://slack.com/api/oauth.v2.access",
+                         data={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
+                               "code": code, "redirect_uri": REDIRECT_URI}, timeout=20)
     data = r.json()
     if not data.get("ok"):
-        logger.error("Slack oauth failed: %s", data)
-        return popup_response("slack_oauth_error", {"error": data}, 400)
-
-    team = data.get("team") or {}
-    team_id = team.get("id")
-    team_name = team.get("name")
-    bot_token = data.get("access_token")
+        return HTMLResponse(f"<h3>Slack install failed</h3><pre>{json.dumps(data, indent=2)}</pre>", status_code=400)
+    team        = data.get("team") or {}
+    team_id     = team.get("id")
+    team_name   = team.get("name")
+    bot_token   = data.get("access_token")
     bot_user_id = data.get("bot_user_id")
-    scope = data.get("scope")
-
+    scope       = data.get("scope")
     if not team_id or not bot_token:
-        return popup_response("slack_oauth_error", {"error": "missing_team_or_token"}, 500)
-
+        return HTMLResponse("<h3>Install failed</h3><p>Missing team_id or token</p>", status_code=500)
     try:
-        upsert_secret(
-            secret_name(team_id),
-            {
-                "team_id": team_id,
-                "team_name": team_name,
-                "bot_user_id": bot_user_id,
-                "bot_token": bot_token,
-                "scope": scope,
-            },
-        )
+        upsert_secret(secret_name(team_id),
+                      {"team_id": team_id, "team_name": team_name,
+                       "bot_user_id": bot_user_id, "bot_token": bot_token, "scope": scope})
     except Exception as e:
-        logger.exception("Failed to save secret")
-        return popup_response("slack_oauth_error", {"error": f"save_failed: {e}"}, 500)
-
-    return popup_response("slack_oauth_success", {"team_id": team_id, "team_name": team_name or ""})
+        return HTMLResponse(f"<h3>Install failed while saving token</h3><pre>{str(e)}</pre>", status_code=500)
+    UI_BASE = os.getenv("UI_BASE_URL", "https://d2bl75rwuudy2k.cloudfront.net").rstrip("/")
+    return RedirectResponse(url=f"{UI_BASE}/?team_id={team_id}", status_code=302)
 
 
 @app.get("/token/status")
@@ -303,44 +264,34 @@ def list_workspaces():
     for page in secrets.get_paginator("list_secrets").paginate():
         for s in page.get("SecretList", []):
             name = s.get("Name", "")
-            if not name.startswith(f"{SECRET_PREFIX}/"):
-                continue
-            if s.get("DeletedDate"):
-                continue
-            team_id = name.split(f"{SECRET_PREFIX}/", 1)[-1]
-            sec = read_secret(name)
-            if not sec or "_error" in sec:
-                continue
-            if not sec.get("bot_token"):
-                continue
-            workspaces.append({"team_id": team_id, "team_name": sec.get("team_name")})
-    workspaces.sort(key=lambda x: (x.get("team_name") or "", x.get("team_id") or ""))
+            if name.startswith(f"{SECRET_PREFIX}/"):
+                team_id = name.split(f"{SECRET_PREFIX}/")[-1]
+                sec     = read_secret(name)
+                workspaces.append({"team_id": team_id,
+                                   "team_name": sec.get("team_name") if sec and "_error" not in sec else None})
     return {"ok": True, "workspaces": workspaces}
+
 
 
 @app.delete("/workspaces/{team_id}")
 def disconnect_workspace(team_id: str):
     name = secret_name(team_id)
-    sec = read_secret(name)
+    sec  = read_secret(name)
     if not sec or "_error" in sec:
         return {"ok": False, "team_id": team_id, "message": "Secret not found"}
-    bot_token = sec.get("bot_token")
+    bot_token   = sec.get("bot_token")
     revoke_data = None
     if bot_token:
-        try:
-            revoke_data = requests.post(
-                "https://slack.com/api/auth.revoke",
-                headers={"Authorization": f"Bearer {bot_token}"},
-                data={"test": "false"},
-                timeout=20,
-            ).json()
-        except Exception as e:
-            revoke_data = {"ok": False, "error": str(e)}
+        revoke_data = requests.post("https://slack.com/api/auth.revoke",
+                                    headers={"Authorization": f"Bearer {bot_token}"},
+                                    data={"test": "false"}, timeout=20).json()
     try:
         secrets.delete_secret(SecretId=name, ForceDeleteWithoutRecovery=True)
     except Exception as e:
-        return {"ok": False, "team_id": team_id, "message": "Failed to delete secret", "detail": str(e), "revoked": revoke_data}
+        return {"ok": False, "team_id": team_id, "message": "Failed to delete secret",
+                "detail": str(e), "revoked": revoke_data}
     return {"ok": True, "team_id": team_id, "revoked": revoke_data}
+
 
 
 @app.get("/channels")
