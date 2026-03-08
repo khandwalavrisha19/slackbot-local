@@ -201,6 +201,7 @@ Resources:
             Cookies:
               Forward: none
 
+
         # Route API endpoints to API Gateway
         CacheBehaviors:
           # /api/* routes
