@@ -426,14 +426,14 @@
             <div style="flex:1;">
               <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">To</div>
               <input type="date" id="chatToDate" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;font-family:'DM Sans',sans-serif;" />
-            </div><br>
-            <div style="margin-top:16px;">
-              <button onclick="document.getElementById('chatFromDate').value='';document.getElementById('chatToDate').value='';"
-                style="font-size:11px;padding:5px 10px;color:var(--text-muted);background:transparent;border:1px solid var(--border);border-radius:5px;cursor:pointer;">Clear</button>
             </div>
           </div>
         </div>
 
+        <div style="margin-top:16px;">
+              <button onclick="document.getElementById('chatFromDate').value='';document.getElementById('chatToDate').value='';"
+                style="font-size:11px;padding:5px 10px;color:var(--text-muted);background:transparent;border:1px solid var(--border);border-radius:5px;cursor:pointer;">Clear</button>
+        </div>
         <div class="btn-group">
           <button class="primary" id="askBtn" onclick="askChat()">Ask</button>
         </div>
