@@ -281,6 +281,52 @@ def resolve_username_for_message(team_id: str, user_id: str, bot_token: str) -> 
     return user_id
 
 
+# ─── patterns that signal the user is asking about a specific person ─────────
+#  "what did vrisha say"   "vrisha's last message"   "messages from vrisha"
+#  "sent by vrisha"        "vrisha mentioned"         "show me vrisha"
+_USER_QUESTION_PATTERNS = [
+    re.compile(r"\bwhat (?:did|has|was) ([A-Za-z][A-Za-z0-9._-]{1,30})\b", re.I),
+    re.compile(r"\b([A-Za-z][A-Za-z0-9._-]{1,30})(?:'s| s)\s+(?:last|latest|recent|first|message|msg)", re.I),
+    re.compile(r"\b(?:from|by|sent by|posted by|written by|messages? from|msg from)\s+([A-Za-z][A-Za-z0-9._-]{1,30})\b", re.I),
+    re.compile(r"\b([A-Za-z][A-Za-z0-9._-]{1,30})\s+(?:said|wrote|posted|mentioned|asked|replied|sent|shared)\b", re.I),
+    re.compile(r"\b(?:show|find|get|list|give me|summarize)\s+(?:me\s+)?(?:all\s+)?(?:messages?\s+(?:from|by)\s+)?([A-Za-z][A-Za-z0-9._-]{1,30})\b", re.I),
+    re.compile(r"\b([A-Za-z][A-Za-z0-9._-]{1,30})\s+(?:last|latest|recent)\s+(?:message|msg|post|comment)\b", re.I),
+]
+
+# words that look like names but are never real user names
+_STOP_WORDS = {
+    "what", "when", "where", "who", "why", "how", "did", "has", "was", "were",
+    "the", "a", "an", "is", "are", "all", "any", "some", "can", "could",
+    "would", "should", "will", "do", "does", "get", "give", "me", "my",
+    "our", "their", "this", "that", "these", "those", "last", "latest",
+    "recent", "first", "message", "messages", "msg", "said", "sent", "post",
+    "from", "by", "in", "on", "at", "about", "show", "find", "list",
+    "summarize", "slack", "channel", "team", "user", "reply", "replies",
+    "wrote", "posted", "mentioned", "asked",
+}
+
+
+def extract_username_from_question(question: str) -> Optional[str]:
+    """
+    Scan a natural-language question for a person's name.
+    Returns the first plausible name found, or None.
+
+    Examples that match:
+      "what did vrisha say last?"          → "vrisha"
+      "vrisha's last message"              → "vrisha"
+      "messages from john.doe"             → "john.doe"
+      "what did alice post yesterday?"     → "alice"
+    """
+    for pattern in _USER_QUESTION_PATTERNS:
+        m = pattern.search(question)
+        if m:
+            candidate = m.group(1).strip().rstrip("'s").strip()
+            if candidate.lower() not in _STOP_WORDS and len(candidate) >= 2:
+                logger.info(f"[name-extract] extracted '{candidate}' from question: {question!r}")
+                return candidate
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SESSION MANAGEMENT
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1020,12 +1066,17 @@ def api_chat(body: ChatRequest, request: Request, response: Response):
         raise HTTPException(400, "question cannot be empty")
     sec = read_secret(secret_name(body.team_id))
     bot_token = (sec or {}).get("bot_token") if sec and not sec.get("_error") else None
+
+    # Auto-extract a username from the question if not explicitly provided
+    active_username = body.username or extract_username_from_question(body.question)
+
     messages = retrieve_messages(body.team_id, body.channel_id, body.question,
                                   body.from_date, body.to_date, body.user_id, 200, min(body.top_k, 12),
-                                  username=body.username, bot_token=bot_token)
+                                  username=active_username, bot_token=bot_token)
     if not messages:
-        note = f"No relevant messages found from user '{body.username}'." if body.username else "No relevant messages found in this channel."
-        return {"ok": True, "answer": note, "citations": []}
+        note = (f"No relevant messages found from '{active_username}'."
+                if active_username else "No relevant messages found in this channel.")
+        return {"ok": True, "answer": note, "citations": [], "resolved_username": active_username}
     context = "\n".join([f"[{i+1}] {m['timestamp_human']} | {m['username'] or m['user_id']}: {m['snippet']}"
                          for i, m in enumerate(messages)])
     prompt = f"""You are a helpful assistant answering questions about Slack conversations.
@@ -1045,7 +1096,8 @@ Citations: <[1], [3] etc>"""
     cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
     citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
     return {"ok": True, "question": body.question, "answer": answer_text,
-            "citations": citations, "retrieved_count": len(messages)}
+            "citations": citations, "retrieved_count": len(messages),
+            "resolved_username": active_username}
 
 
 @app.post("/api/chat/multi")
@@ -1058,12 +1110,18 @@ def api_chat_multi(body: MultiChatRequest, request: Request, response: Response)
         raise HTTPException(400, "channel_ids must be non-empty")
     sec = read_secret(secret_name(body.team_id))
     bot_token = (sec or {}).get("bot_token") if sec and not sec.get("_error") else None
+
+    # Auto-extract a username from the question if not explicitly provided
+    active_username = body.username or extract_username_from_question(body.question)
+
     messages = retrieve_messages_multi(body.team_id, body.channel_ids, body.question,
                                         body.from_date, body.to_date, body.user_id, 200, min(body.top_k, 20),
-                                        username=body.username, bot_token=bot_token)
+                                        username=active_username, bot_token=bot_token)
     if not messages:
-        note = f"No relevant messages found from user '{body.username}'." if body.username else "No relevant messages found across selected channels."
-        return {"ok": True, "answer": note, "citations": [], "channels_searched": len(body.channel_ids)}
+        note = (f"No relevant messages found from '{active_username}'."
+                if active_username else "No relevant messages found across selected channels.")
+        return {"ok": True, "answer": note, "citations": [], "channels_searched": len(body.channel_ids),
+                "resolved_username": active_username}
     context = "\n".join([
         f"[{i+1}] {m['timestamp_human']} | #{m.get('channel_id','')} | {m['username'] or m['user_id']}: {m['snippet']}"
         for i, m in enumerate(messages)])
@@ -1084,7 +1142,7 @@ Citations: <[1], [3] etc>"""
     citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
     return {"ok": True, "question": body.question, "answer": answer_text,
             "citations": citations, "retrieved_count": len(messages),
-            "channels_searched": len(body.channel_ids)}
+            "channels_searched": len(body.channel_ids), "resolved_username": active_username}
 
 
 handler = Mangum(app)

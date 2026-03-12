@@ -797,7 +797,7 @@
         const payload = { team_id, channel_ids: channelIds, question };
         if (chatUsername) payload.username = chatUsername;
         requestBody = JSON.stringify(payload);
-        setStatus("Thinking across " + channelIds.length + " channels" + (chatUsername ? " for @" + chatUsername : "") + "…");
+        setStatus("Thinking across " + channelIds.length + " channels…");
       } else {
         const channel_id = document.getElementById("channelSelect").value;
         if (!channel_id) { setStatus("Select workspace + channel first", "warn"); btn.disabled = false; btn.textContent = "Ask"; return; }
@@ -805,7 +805,7 @@
         const payload = { team_id, channel_id, question };
         if (chatUsername) payload.username = chatUsername;
         requestBody = JSON.stringify(payload);
-        setStatus("Thinking" + (chatUsername ? " about @" + chatUsername : "") + "…");
+        setStatus("Thinking…");
       }
 
       const r = await fetch(endpoint, {
@@ -881,6 +881,12 @@
         // Multi-channel badge
         if (data.channels_searched && data.channels_searched > 1) {
           html = '<div style="font-size:11px;color:var(--accent);margin-bottom:8px;padding:4px 8px;background:rgba(155,127,232,0.08);border-radius:4px;border:1px solid rgba(155,127,232,0.2);">🌐 Answer synthesized from <strong>' + data.channels_searched + ' channels</strong> · ' + (data.retrieved_count || 0) + ' messages reviewed</div>' + html;
+        }
+
+        // Resolved username badge — shown when a name was auto-detected from the question
+        if (data.resolved_username) {
+          html = '<div style="font-size:11px;color:var(--teal,#0d9488);margin-bottom:8px;padding:4px 10px;background:rgba(13,148,136,0.07);border-radius:4px;border:1px solid rgba(13,148,136,0.2);display:inline-flex;align-items:center;gap:5px;">'
+            + '👤 Filtering messages from <strong>@' + data.resolved_username + '</strong></div><br>' + html;
         }
 
         document.getElementById("chatAnswerText").innerHTML = html;
