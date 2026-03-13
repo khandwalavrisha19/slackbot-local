@@ -288,12 +288,15 @@
         </div>
         <div class="field">
           <label>Workspace</label>
-          <select id="workspaceSelect" onchange="loadChannels()">
+          <select id="workspaceSelect">
             <option value="">— No workspaces loaded —</option>
           </select>
         </div>
         <div class="btn-group">
           <button onclick="loadWorkspaces()">Load Workspaces</button>
+          <button class="primary" onclick="loadChannels()" id="loadChannelsBtn">Load Channels</button>
+        </div>
+        <div class="btn-group">
           <button onclick="checkToken()">Token Status</button>
           <button class="danger" onclick="disconnectWorkspace()">Disconnect</button>
         </div>
@@ -645,11 +648,13 @@
     try{
       setStatus("Loading workspaces…");
       const data = await fetchJson(getApiBase() + "/workspaces");
+      // Always show the workspace list in the output panel — never overwrite it automatically
       show(data);
       const sel = document.getElementById("workspaceSelect");
       const channelSel = document.getElementById("channelSelect");
       sel.innerHTML = "";
-      channelSel.innerHTML = '<option value="">— Load channels first —</option>';
+      // Reset channels whenever workspaces are reloaded
+      channelSel.innerHTML = '<option value="">— Select workspace, then Load Channels —</option>';
       if (!data.ok) {
         sel.innerHTML = '<option value="">— failed to load workspaces —</option>';
         setStatus("Workspaces load failed", "err");
@@ -665,13 +670,12 @@
       list.forEach((w, idx) => {
         const opt = document.createElement("option");
         opt.value = w.team_id;
-        opt.textContent = w.team_id + (w.team_name ? (" • " + w.team_name) : "");
+        opt.textContent = (w.team_name ? w.team_name : w.team_id) + (w.team_name ? "  (" + w.team_id + ")" : "");
         if ((preferredTeamId && w.team_id === preferredTeamId) || (!preferredTeamId && idx === 0)) { opt.selected = true; chosen = true; }
         sel.appendChild(opt);
       });
       if (!chosen && sel.options.length > 0) sel.selectedIndex = 0;
-      setStatus("Workspaces loaded", "ok");
-      if (sel.value) await loadChannels();
+      setStatus(list.length + " workspace" + (list.length > 1 ? "s" : "") + " loaded — click Load Channels", "ok");
     }catch(e){ show({ok:false, error:String(e)}); setStatus("Workspaces load failed", "err"); }
   }
 
@@ -877,7 +881,6 @@
       cb.id    = uid;
       cb.value = o.value;
       cb.checked = sel.has(o.value);
-      // Update our tracking set on change
       cb.addEventListener("change", () => {
         if (cb.checked) sel.add(o.value); else sel.delete(o.value);
       });
