@@ -686,20 +686,25 @@ def retrieve_messages_multi(
 GROQ_TIMEOUT_CONNECT = 5   # seconds to establish connection
 GROQ_TIMEOUT_READ    = 30  # seconds to read response
 
-def _groq_complete(prompt: str, max_tokens: int = 1024) -> str:
+def _groq_complete(prompt: str, max_tokens: int = 1024, system: Optional[str] = None) -> str:
     """
     Call Groq API with explicit connect + read timeouts.
-    Returns a safe fallback message instead of raising on timeout/5xx,
-    so the caller can still return a useful JSON response to the user.
+    Accepts an optional system prompt for grounding rules.
+    Returns a safe fallback message instead of raising on timeout/5xx.
     """
     request_id = str(uuid.uuid4())[:8]
     if not GROQ_API_KEY:
         logger.error("Groq API key missing", extra={"request_id": request_id})
         raise HTTPException(500, "GROQ_API_KEY not set")
 
+    messages_payload: list[dict] = []
+    if system:
+        messages_payload.append({"role": "system", "content": system})
+    messages_payload.append({"role": "user", "content": prompt})
+
     payload = {
         "model": GROQ_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages_payload,
         "temperature": 0.2,
         "max_tokens": max_tokens,
     }
@@ -1336,21 +1341,22 @@ def api_chat(body: ChatRequest, request: Request, response: Response):
 
     context = "\n".join([f"[{i+1}] {m['timestamp_human']} | {m['username'] or m['user_id']}: {m['snippet']}"
                          for i, m in enumerate(messages)])
-    prompt = f"""You are a helpful assistant answering questions about Slack conversations.
-Answer ONLY using the messages below. Do NOT use outside knowledge.
-If not found say: "I couldn't find that in the available messages."
-
-SLACK MESSAGES:
-{context}
-
-QUESTION: {body.question}
-
-Answer: <your answer>
-Key points: <bullets if relevant>
-Action items: <action items or 'None'>
-Citations: <[1], [3] etc>"""
-
-    answer_text   = _groq_complete(prompt, 1024)
+    system_prompt = (
+        "You are a precise assistant answering questions ONLY from the Slack messages provided.\n"
+        "Rules:\n"
+        "1. Read each message IN FULL — important content often appears at the END of a message.\n"
+        "2. If the answer is not present say: I couldn't find that in the available messages.\n"
+        "3. Never use outside knowledge or guess.\n"
+        "4. Cite message numbers like [1] or [2] for every claim.\n"
+        "5. Be concise and direct.\n"
+        "Output format:\n"
+        "Answer: <direct answer>\n"
+        "Key points: <bullets or None>\n"
+        "Action items: <list or None>\n"
+        "Citations: <[1], [2] etc>"
+    )
+    user_prompt = f"SLACK MESSAGES:\n{context}\n\nQUESTION: {body.question}"
+    answer_text   = _groq_complete(user_prompt, 1024, system=system_prompt)
     cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
     citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
 
@@ -1401,20 +1407,22 @@ def api_chat_multi(body: MultiChatRequest, request: Request, response: Response)
     context = "\n".join([
         f"[{i+1}] {m['timestamp_human']} | #{m.get('channel_id','')} | {m['username'] or m['user_id']}: {m['snippet']}"
         for i, m in enumerate(messages)])
-    prompt = f"""You are a helpful assistant answering questions about Slack conversations across {len(body.channel_ids)} channels.
-Answer ONLY using the messages below. Do NOT use outside knowledge.
-
-SLACK MESSAGES:
-{context}
-
-QUESTION: {body.question}
-
-Answer: <your answer>
-Key points: <bullets if relevant>
-Action items: <action items or 'None'>
-Citations: <[1], [3] etc>"""
-
-    answer_text   = _groq_complete(prompt, 1500)
+    system_prompt = (
+        f"You are a precise assistant answering questions ONLY from Slack messages across {len(body.channel_ids)} channels.\n"
+        "Rules:\n"
+        "1. Read each message IN FULL — important content often appears at the END of a message.\n"
+        "2. If the answer is not present say: I couldn't find that in the available messages.\n"
+        "3. Never use outside knowledge or guess.\n"
+        "4. Cite message numbers like [1] or [2] for every claim.\n"
+        "5. Note the channel when relevant.\n"
+        "Output format:\n"
+        "Answer: <direct answer>\n"
+        "Key points: <bullets or None>\n"
+        "Action items: <list or None>\n"
+        "Citations: <[1], [2] etc>"
+    )
+    user_prompt = f"SLACK MESSAGES:\n{context}\n\nQUESTION: {body.question}"
+    answer_text   = _groq_complete(user_prompt, 1500, system=system_prompt)
     cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
     citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
 
