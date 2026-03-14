@@ -6,6 +6,7 @@ import time
 import hmac
 import hashlib
 import logging
+import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
@@ -18,11 +19,46 @@ from boto3.dynamodb.conditions import Key, Attr
 from fastapi import FastAPI, Request, Query, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
+from fastapi.exceptions import RequestValidationError
 from mangum import Mangum
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+# ── STRUCTURED LOGGING ────────────────────────────────────────────────────────
+class StructuredLogger(logging.Logger):
+    """Logger that emits JSON lines for easy CloudWatch querying."""
+    def _log_json(self, level: str, msg: str, **extra):
+        record = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": level,
+            "message": msg,
+            **extra,
+        }
+        print(json.dumps(record, default=str), file=sys.stdout, flush=True)
+
+    def info(self, msg, *args, **kwargs):      # type: ignore[override]
+        extra = kwargs.pop("extra", {})
+        super().info(msg, *args, **kwargs)
+        self._log_json("INFO",  str(msg), **extra)
+
+    def warning(self, msg, *args, **kwargs):   # type: ignore[override]
+        extra = kwargs.pop("extra", {})
+        super().warning(msg, *args, **kwargs)
+        self._log_json("WARNING", str(msg), **extra)
+
+    def error(self, msg, *args, **kwargs):     # type: ignore[override]
+        extra = kwargs.pop("extra", {})
+        super().error(msg, *args, **kwargs)
+        self._log_json("ERROR", str(msg), **extra)
+
+
+logging.setLoggerClass(StructuredLogger)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+logger: StructuredLogger = logging.getLogger(__name__)  # type: ignore[assignment]
+
+# ── REQUEST SIZE LIMITS ───────────────────────────────────────────────────────
+MAX_BODY_BYTES = 64 * 1024          # 64 KB hard limit for all POST bodies
+MAX_QUESTION_LEN = 1_000            # chars
+MAX_CHANNEL_IDS = 20                # max channels in multi-chat/search
 
 # ── ENV CONFIG ────────────────────────────────────────────────────────────────
 AWS_REGION           = os.getenv("AWS_REGION", "ap-south-1").strip()
@@ -49,6 +85,62 @@ IS_PROD              = os.getenv("ENV", "dev").strip().lower() == "prod"
 origins = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()] or ["*"]
 
 app = FastAPI(title="Slackbot Full MVP")
+
+# ── REQUEST SIZE LIMIT MIDDLEWARE ─────────────────────────────────────────────
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_BODY_BYTES:
+        logger.warning("Request body too large", extra={
+            "path": request.url.path,
+            "content_length": content_length,
+            "limit_bytes": MAX_BODY_BYTES,
+        })
+        return JSONResponse(
+            status_code=413,
+            content={"ok": False, "error": f"Request body exceeds {MAX_BODY_BYTES // 1024} KB limit"},
+        )
+    return await call_next(request)
+
+# ── GLOBAL EXCEPTION HANDLERS ─────────────────────────────────────────────────
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    logger.warning("Validation error", extra={
+        "path": request.url.path,
+        "errors": [{"field": ".".join(str(l) for l in e["loc"]), "msg": e["msg"]} for e in errors],
+    })
+    return JSONResponse(
+        status_code=422,
+        content={
+            "ok": False,
+            "error": "Validation failed",
+            "details": [
+                {"field": ".".join(str(l) for l in e["loc"]), "message": e["msg"]}
+                for e in errors
+            ],
+        },
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if exc.status_code >= 500:
+        logger.error("HTTP error", extra={"path": request.url.path, "status": exc.status_code, "detail": exc.detail})
+    else:
+        logger.warning("HTTP error", extra={"path": request.url.path, "status": exc.status_code, "detail": exc.detail})
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"ok": False, "error": exc.detail},
+    )
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled exception", extra={"path": request.url.path, "error": str(exc), "type": type(exc).__name__})
+    return JSONResponse(
+        status_code=500,
+        content={"ok": False, "error": "An internal server error occurred. Please try again."},
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins if origins != ["*"] else ["*"],
@@ -548,20 +640,69 @@ def retrieve_messages_multi(
     return all_items[:top_k]
 
 
+GROQ_TIMEOUT_CONNECT = 5   # seconds to establish connection
+GROQ_TIMEOUT_READ    = 30  # seconds to read response
+
 def _groq_complete(prompt: str, max_tokens: int = 1024) -> str:
+    """
+    Call Groq API with explicit connect + read timeouts.
+    Returns a safe fallback message instead of raising on timeout/5xx,
+    so the caller can still return a useful JSON response to the user.
+    """
+    request_id = str(uuid.uuid4())[:8]
     if not GROQ_API_KEY:
+        logger.error("Groq API key missing", extra={"request_id": request_id})
         raise HTTPException(500, "GROQ_API_KEY not set")
-    resp = requests.post(
-        GROQ_URL,
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
-              "temperature": 0.2, "max_tokens": max_tokens},
-        timeout=45,
-    )
-    data = resp.json()
+
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+    }
+    start = time.time()
+    try:
+        resp = requests.post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=(GROQ_TIMEOUT_CONNECT, GROQ_TIMEOUT_READ),
+        )
+    except requests.exceptions.ConnectTimeout:
+        elapsed = round(time.time() - start, 2)
+        logger.error("Groq connect timeout", extra={"request_id": request_id, "elapsed_s": elapsed})
+        return "⚠️ The AI service took too long to connect. Please try again in a moment."
+    except requests.exceptions.ReadTimeout:
+        elapsed = round(time.time() - start, 2)
+        logger.error("Groq read timeout", extra={"request_id": request_id, "elapsed_s": elapsed})
+        return "⚠️ The AI service timed out while generating a response. Try a shorter question or smaller date range."
+    except requests.exceptions.RequestException as exc:
+        logger.error("Groq network error", extra={"request_id": request_id, "error": str(exc)})
+        return "⚠️ Could not reach the AI service due to a network error. Please try again."
+
+    elapsed = round(time.time() - start, 2)
+
+    try:
+        data = resp.json()
+    except ValueError:
+        logger.error("Groq non-JSON response", extra={"request_id": request_id, "status": resp.status_code})
+        return "⚠️ Received an unexpected response from the AI service."
+
+    if resp.status_code == 429:
+        logger.warning("Groq rate limited", extra={"request_id": request_id})
+        return "⚠️ The AI service is currently rate-limited. Please wait a few seconds and try again."
+
+    if resp.status_code >= 500:
+        logger.error("Groq 5xx error", extra={"request_id": request_id, "status": resp.status_code})
+        return "⚠️ The AI service returned a server error. Please try again shortly."
+
     if resp.status_code != 200:
-        raise HTTPException(502, f"Groq error: {data}")
-    return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        logger.error("Groq unexpected status", extra={"request_id": request_id, "status": resp.status_code, "body": str(data)[:200]})
+        raise HTTPException(502, f"Groq error {resp.status_code}: {data}")
+
+    answer = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    logger.info("Groq call succeeded", extra={"request_id": request_id, "elapsed_s": elapsed, "tokens": data.get("usage", {}).get("total_tokens")})
+    return answer
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -874,27 +1015,43 @@ def backfill_channel(team_id: str, channel_id: str, request: Request, limit: int
 async def slack_events(request: Request):
     require_ddb()
     raw_body = await request.body()
-    payload  = json.loads(raw_body.decode("utf-8"))
+
+    # Reject oversized payloads before any processing
+    if len(raw_body) > MAX_BODY_BYTES:
+        logger.warning("Slack event payload too large", extra={"size_bytes": len(raw_body)})
+        return JSONResponse({"ok": False, "error": "payload_too_large"}, status_code=413)
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        logger.warning("Slack event: invalid JSON body")
+        return JSONResponse({"ok": False, "error": "invalid_json"}, status_code=400)
+
     if payload.get("type") == "url_verification":
         return JSONResponse({"challenge": payload.get("challenge")})
+
     timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
     signature = request.headers.get("X-Slack-Signature", "")
     if not verify_slack_signature(SLACK_SIGNING_SECRET, timestamp, raw_body, signature):
+        logger.warning("Slack event: invalid signature")
         return JSONResponse({"ok": False, "error": "invalid_signature"}, status_code=401)
+
     if payload.get("type") != "event_callback":
         return JSONResponse({"ok": True})
+
     event = payload.get("event") or {}
     if event.get("type") != "message":
         return JSONResponse({"ok": True})
     if event.get("bot_id") or event.get("subtype") in {"message_changed", "message_deleted"}:
         return JSONResponse({"ok": True})
+
     team_id    = payload.get("team_id")
     channel_id = event.get("channel")
     ts_msg     = event.get("ts")
     if not team_id or not channel_id or not ts_msg:
         return JSONResponse({"ok": True})
+
     uid = event.get("user")
-    # Resolve username — read bot token from Secrets Manager
     event_username = ""
     if uid:
         try:
@@ -903,6 +1060,7 @@ async def slack_events(request: Request):
                 event_username = resolve_username_for_message(team_id, uid, sec["bot_token"])
         except Exception:
             pass
+
     item = {
         "pk": f"{team_id}#{channel_id}", "sk": str(ts_msg),
         "team_id": team_id, "channel_id": channel_id, "ts": str(ts_msg),
@@ -912,8 +1070,10 @@ async def slack_events(request: Request):
     }
     try:
         ddb_table.put_item(Item=item, ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)")
+        logger.info("Slack event stored", extra={"team_id": team_id, "channel_id": channel_id, "ts": ts_msg, "user_id": uid})
     except ClientError as e:
         if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            logger.error("DynamoDB put failed for event", extra={"team_id": team_id, "ts": ts_msg, "error": str(e)})
             raise
     return JSONResponse({"ok": True})
 
@@ -1007,45 +1167,130 @@ def api_search_multi(
 
 # ── ASK AI ────────────────────────────────────────────────────────────────────
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+def _validate_date(v: Optional[str]) -> Optional[str]:
+    if v is not None and not _DATE_RE.match(v):
+        raise ValueError("Date must be in YYYY-MM-DD format")
+    return v
+
+def _validate_team_id(v: str) -> str:
+    v = v.strip()
+    if not v:
+        raise ValueError("team_id cannot be empty")
+    if not re.match(r"^[A-Z0-9]{1,20}$", v):
+        raise ValueError("team_id must be alphanumeric (Slack workspace ID)")
+    return v
+
+def _validate_channel_id(v: str) -> str:
+    v = v.strip()
+    if not v:
+        raise ValueError("channel_id cannot be empty")
+    if not re.match(r"^[A-Z0-9]{1,20}$", v):
+        raise ValueError("channel_id must be a valid Slack channel ID")
+    return v
+
+
 class ChatRequest(BaseModel):
-    team_id: str
-    channel_id: str
-    question: str
-    from_date: Optional[str] = None
-    to_date: Optional[str] = None
-    user_id: Optional[str] = None
-    top_k: int = 10
+    team_id: str = Field(..., min_length=1, max_length=20)
+    channel_id: str = Field(..., min_length=1, max_length=20)
+    question: str = Field(..., min_length=1, max_length=MAX_QUESTION_LEN)
+    from_date: Optional[str] = Field(None)
+    to_date: Optional[str] = Field(None)
+    user_id: Optional[str] = Field(None, max_length=20)
+    top_k: int = Field(10, ge=1, le=12)
+
+    @field_validator("team_id")
+    @classmethod
+    def validate_team(cls, v): return _validate_team_id(v)
+
+    @field_validator("channel_id")
+    @classmethod
+    def validate_channel(cls, v): return _validate_channel_id(v)
+
+    @field_validator("from_date", "to_date")
+    @classmethod
+    def validate_date(cls, v): return _validate_date(v)
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("question cannot be blank")
+        return v
 
 
 class MultiChatRequest(BaseModel):
-    team_id: str
-    channel_ids: list[str]
-    question: str
-    from_date: Optional[str] = None
-    to_date: Optional[str] = None
-    user_id: Optional[str] = None
-    top_k: int = 10
+    team_id: str = Field(..., min_length=1, max_length=20)
+    channel_ids: list[str] = Field(..., min_length=1, max_length=MAX_CHANNEL_IDS)
+    question: str = Field(..., min_length=1, max_length=MAX_QUESTION_LEN)
+    from_date: Optional[str] = Field(None)
+    to_date: Optional[str] = Field(None)
+    user_id: Optional[str] = Field(None, max_length=20)
+    top_k: int = Field(10, ge=1, le=20)
+
+    @field_validator("team_id")
+    @classmethod
+    def validate_team(cls, v): return _validate_team_id(v)
+
+    @field_validator("channel_ids")
+    @classmethod
+    def validate_channels(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("channel_ids must not be empty")
+        if len(v) > MAX_CHANNEL_IDS:
+            raise ValueError(f"Too many channels — max {MAX_CHANNEL_IDS}")
+        return [_validate_channel_id(c) for c in v]
+
+    @field_validator("from_date", "to_date")
+    @classmethod
+    def validate_date(cls, v): return _validate_date(v)
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("question cannot be blank")
+        return v
 
 
 @app.post("/api/chat")
 def api_chat(body: ChatRequest, request: Request, response: Response):
     no_cache(response)
+    request_id = str(uuid.uuid4())[:8]
     require_team_access(request, body.team_id)
     if not body.question.strip():
         raise HTTPException(400, "question cannot be empty")
+
+    logger.info("Chat request started", extra={
+        "request_id": request_id,
+        "team_id": body.team_id,
+        "channel_id": body.channel_id,
+        "question_len": len(body.question),
+        "top_k": body.top_k,
+    })
+
     sec = read_secret(secret_name(body.team_id))
     bot_token = (sec or {}).get("bot_token") if sec and not sec.get("_error") else None
 
-    # Auto-extract a username from the question if not explicitly provided
     active_username = extract_username_from_question(body.question)
 
-    messages = retrieve_messages(body.team_id, body.channel_id, body.question,
-                                  body.from_date, body.to_date, body.user_id, 200, min(body.top_k, 12),
-                                  username=active_username, bot_token=bot_token)
+    try:
+        messages = retrieve_messages(body.team_id, body.channel_id, body.question,
+                                      body.from_date, body.to_date, body.user_id, 200, min(body.top_k, 12),
+                                      username=active_username, bot_token=bot_token)
+    except RuntimeError as e:
+        logger.error("Message retrieval failed", extra={"request_id": request_id, "error": str(e)})
+        raise HTTPException(500, str(e))
+
     if not messages:
         note = (f"No relevant messages found from '{active_username}'."
                 if active_username else "No relevant messages found in this channel.")
-        return {"ok": True, "answer": note, "citations": [], "resolved_username": active_username}
+        logger.info("Chat: no messages found", extra={"request_id": request_id, "username": active_username})
+        return {"ok": True, "request_id": request_id, "answer": note, "citations": [], "resolved_username": active_username}
+
     context = "\n".join([f"[{i+1}] {m['timestamp_human']} | {m['username'] or m['user_id']}: {m['snippet']}"
                          for i, m in enumerate(messages)])
     prompt = f"""You are a helpful assistant answering questions about Slack conversations.
@@ -1061,10 +1306,18 @@ Answer: <your answer>
 Key points: <bullets if relevant>
 Action items: <action items or 'None'>
 Citations: <[1], [3] etc>"""
+
     answer_text   = _groq_complete(prompt, 1024)
     cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
     citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
-    return {"ok": True, "question": body.question, "answer": answer_text,
+
+    logger.info("Chat request completed", extra={
+        "request_id": request_id,
+        "retrieved_count": len(messages),
+        "citations_count": len(citations),
+        "is_fallback": answer_text.startswith("⚠️"),
+    })
+    return {"ok": True, "request_id": request_id, "question": body.question, "answer": answer_text,
             "citations": citations, "retrieved_count": len(messages),
             "resolved_username": active_username}
 
@@ -1072,15 +1325,24 @@ Citations: <[1], [3] etc>"""
 @app.post("/api/chat/multi")
 def api_chat_multi(body: MultiChatRequest, request: Request, response: Response):
     no_cache(response)
+    request_id = str(uuid.uuid4())[:8]
     require_team_access(request, body.team_id)
     if not body.question.strip():
         raise HTTPException(400, "question cannot be empty")
     if not body.channel_ids:
         raise HTTPException(400, "channel_ids must be non-empty")
+
+    logger.info("Multi-chat request started", extra={
+        "request_id": request_id,
+        "team_id": body.team_id,
+        "channel_count": len(body.channel_ids),
+        "question_len": len(body.question),
+        "top_k": body.top_k,
+    })
+
     sec = read_secret(secret_name(body.team_id))
     bot_token = (sec or {}).get("bot_token") if sec and not sec.get("_error") else None
 
-    # Auto-extract a username from the question if not explicitly provided
     active_username = extract_username_from_question(body.question)
 
     messages = retrieve_messages_multi(body.team_id, body.channel_ids, body.question,
@@ -1089,8 +1351,10 @@ def api_chat_multi(body: MultiChatRequest, request: Request, response: Response)
     if not messages:
         note = (f"No relevant messages found from '{active_username}'."
                 if active_username else "No relevant messages found across selected channels.")
-        return {"ok": True, "answer": note, "citations": [], "channels_searched": len(body.channel_ids),
-                "resolved_username": active_username}
+        logger.info("Multi-chat: no messages found", extra={"request_id": request_id, "username": active_username})
+        return {"ok": True, "request_id": request_id, "answer": note, "citations": [],
+                "channels_searched": len(body.channel_ids), "resolved_username": active_username}
+
     context = "\n".join([
         f"[{i+1}] {m['timestamp_human']} | #{m.get('channel_id','')} | {m['username'] or m['user_id']}: {m['snippet']}"
         for i, m in enumerate(messages)])
@@ -1106,10 +1370,19 @@ Answer: <your answer>
 Key points: <bullets if relevant>
 Action items: <action items or 'None'>
 Citations: <[1], [3] etc>"""
+
     answer_text   = _groq_complete(prompt, 1500)
     cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
     citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
-    return {"ok": True, "question": body.question, "answer": answer_text,
+
+    logger.info("Multi-chat request completed", extra={
+        "request_id": request_id,
+        "retrieved_count": len(messages),
+        "channels_searched": len(body.channel_ids),
+        "citations_count": len(citations),
+        "is_fallback": answer_text.startswith("⚠️"),
+    })
+    return {"ok": True, "request_id": request_id, "question": body.question, "answer": answer_text,
             "citations": citations, "retrieved_count": len(messages),
             "channels_searched": len(body.channel_ids), "resolved_username": active_username}
 
