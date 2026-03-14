@@ -526,10 +526,31 @@ def require_team_access(request: Request, team_id: str) -> dict:
 # MESSAGE RETRIEVAL HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Words that signal "give me recent/latest messages" — NOT content to search for
+_RECENCY_WORDS = frozenset([
+    "last", "latest", "recent", "newest", "today", "yesterday",
+    "just", "now", "current", "recently", "new"
+])
+
+def _is_recency_query(q: str) -> bool:
+    """True if the question is asking about recency/time, not specific content."""
+    words = set(re.findall(r"\w+", q.lower()))
+    return bool(words & _RECENCY_WORDS)
+
+def _content_keywords(q: str) -> list[str]:
+    """Return only the meaningful content keywords — strips recency words and short noise."""
+    return [w for w in re.findall(r"\w+", q.lower())
+            if w not in _RECENCY_WORDS and len(w) > 2]
+
 def _score_messages(items: list[dict], q: str) -> list[dict]:
-    keywords = re.findall(r"\w+", q.lower())
+    keywords = _content_keywords(q)
+
+    # Pure recency query ("who sent the last message") — no content to score,
+    # items are already newest-first from DynamoDB, just filter join/leave noise
     if not keywords:
-        return items
+        return [i for i in items
+                if not re.search(r"<@\w+> has (joined|left)", (i.get("text") or "").lower())]
+
     scored = []
     for item in items:
         text = (item.get("text") or "").lower()
@@ -540,7 +561,14 @@ def _score_messages(items: list[dict], q: str) -> list[dict]:
         if score > 0:
             scored.append((score, item))
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [item for _, item in scored]
+    result = [item for _, item in scored]
+
+    # Mixed query ("last message and what was it about") — after content scoring,
+    # sort by timestamp so the most recent match surfaces first
+    if _is_recency_query(q) and result:
+        result.sort(key=lambda m: m.get("sk") or m.get("ts") or "", reverse=True)
+
+    return result
 
 
 def _format_messages(items: list[dict]) -> list[dict]:
@@ -598,7 +626,15 @@ def retrieve_messages(
     items = [i for i in items if not re.search(r"<@\w+> has (joined|left)", (i.get("text") or "").lower())]
     if not q or not q.strip():
         return _format_messages(items[:top_k])
+
+    # Pure recency query — skip scoring, items already newest-first from DynamoDB
+    if not _content_keywords(q):
+        return _format_messages(items[:top_k])
+
     matched = _score_messages(items, q)
+    # If scoring found nothing, fall back to recency order rather than empty
+    if not matched:
+        return _format_messages(items[:top_k])
     return _format_messages(matched[:top_k])
 
 
@@ -628,13 +664,20 @@ def retrieve_messages_multi(
     if not all_items:
         return []
     if q and q.strip():
-        keywords = re.findall(r"\w+", q.lower())
-        def score(m):
-            text = (m.get("text") or "").lower()
-            s  = sum(text.count(kw) for kw in keywords)
-            s += sum(2 for kw in keywords if kw in text[:80])
-            return s
-        all_items.sort(key=score, reverse=True)
+        content_kws = _content_keywords(q)
+        if content_kws:
+            def score(m):
+                text = (m.get("text") or "").lower()
+                s  = sum(text.count(kw) for kw in content_kws)
+                s += sum(2 for kw in content_kws if kw in text[:80])
+                return s
+            all_items.sort(key=score, reverse=True)
+            # Mixed recency+content query — also sort by time so newest surfaces first
+            if _is_recency_query(q):
+                all_items.sort(key=lambda m: m.get("message_ts", ""), reverse=True)
+        else:
+            # Pure recency — newest first
+            all_items.sort(key=lambda m: m.get("message_ts", ""), reverse=True)
     else:
         all_items.sort(key=lambda m: m.get("message_ts", ""), reverse=True)
     return all_items[:top_k]
