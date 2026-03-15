@@ -527,9 +527,18 @@ def require_team_access(request: Request, team_id: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Words that signal "give me recent/latest messages" — NOT content to search for
+# Words stripped before keyword scoring — temporal words, question words, and stop words
+# that never appear as meaningful content in message bodies.
 _RECENCY_WORDS = frozenset([
+    # temporal / recency
     "last", "latest", "recent", "newest", "today", "yesterday",
-    "just", "now", "current", "recently", "new"
+    "just", "now", "current", "recently", "new",
+    "next", "week", "soon", "tomorrow", "upcoming", "future",
+    # question words — never content keywords
+    "what", "who", "whose", "whom", "where", "when", "why", "how",
+    # stop words that score noisily against message bodies
+    "about", "said", "say", "says", "did", "does", "from",
+    "the", "and", "for", "with", "its", "this", "that", "tell",
 ])
 
 def _is_recency_query(q: str) -> bool:
@@ -721,6 +730,34 @@ def _build_context(messages: list[dict], channel_prefix: bool = False) -> tuple[
         lines.append(line)
         total += len(line) + 1
     return "\n".join(lines), len(lines)
+
+
+
+def _augment_question_with_senders(question: str, messages: list[dict]) -> str:
+    """
+    If the question asks WHO, extract unique sender names from the
+    retrieved messages and inject them directly into the question.
+    This removes any reliance on the LLM to figure out the sender itself.
+    """
+    who_words = {"who", "whose", "whom"}
+    q_words = set(question.lower().split())
+    if not (q_words & who_words):
+        return question  # question doesn't ask about WHO, leave unchanged
+
+    senders = []
+    seen = set()
+    for m in messages:
+        name = (m.get("username") or m.get("user_id") or "").strip()
+        if name and name not in seen:
+            senders.append(name)
+            seen.add(name)
+
+    if not senders:
+        return question
+
+    sender_str = ", ".join(senders)
+    # Append sender context directly to the question so LLM can't miss it
+    return f"{question} [NOTE: The message(s) were sent by: {sender_str}. You MUST name them in your answer.]"
 
 
 GROQ_TIMEOUT_CONNECT = 5   # seconds to establish connection
@@ -1402,7 +1439,8 @@ def api_chat(body: ChatRequest, request: Request, response: Response):
         "Action items: <list or None>\n"
         "Citations: <[1], [2] etc>"
     )
-    user_prompt = f"SLACK MESSAGES:\n{context}\n\nQUESTION: {body.question}"
+    augmented_q  = _augment_question_with_senders(body.question, messages)
+    user_prompt = f"SLACK MESSAGES:\n{context}\n\nQUESTION: {augmented_q}"
     answer_text   = _groq_complete(user_prompt, MAX_TOKENS_SINGLE, system=system_prompt)
     cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
     citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
@@ -1469,7 +1507,8 @@ def api_chat_multi(body: MultiChatRequest, request: Request, response: Response)
         "Action items: <list or None>\n"
         "Citations: <[1], [2] etc>"
     )
-    user_prompt = f"SLACK MESSAGES:\n{context}\n\nQUESTION: {body.question}"
+    augmented_q  = _augment_question_with_senders(body.question, messages)
+    user_prompt = f"SLACK MESSAGES:\n{context}\n\nQUESTION: {augmented_q}"
     answer_text   = _groq_complete(user_prompt, MAX_TOKENS_MULTI, system=system_prompt)
     cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
     citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
