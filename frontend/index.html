@@ -622,10 +622,8 @@
       html += `<div style="padding:10px 12px;border-radius:8px;background:rgba(155,127,232,0.06);border:1px solid rgba(155,127,232,0.15);margin-bottom:14px;">
         <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Query Info</div>
         <div style="font-size:12px;color:var(--text-soft);margin-bottom:4px;">${esc(obj.question)}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:11px;color:var(--text-muted);">
+        <div style="display:flex;gap:12px;margin-top:8px;font-size:11px;color:var(--text-muted);">
           <span>📨 ${obj.retrieved || 0} messages retrieved</span>
-          ${obj.ctx_messages ? `<span>📋 ${obj.ctx_messages} sent to AI</span>` : ""}
-          ${obj.tokens_used ? `<span>🔢 ${obj.tokens_used} tokens used</span>` : ""}
           ${obj.channels_searched > 1 ? `<span>🌐 ${obj.channels_searched} channels</span>` : ""}
         </div>
       </div>`;
@@ -1218,7 +1216,7 @@
         document.getElementById("chatAnswer").style.display = "block";
         const chInfo = data.channels_searched && data.channels_searched > 1 ? ` (${data.channels_searched} channels)` : "";
         setStatus("Answer ready" + chInfo, "ok");
-        show({ ok: true, question: data.question, answer: data.answer, citations: data.citations, retrieved: data.retrieved_count, channels_searched: data.channels_searched, resolved_username: data.resolved_username, tokens_used: data.tokens_used, ctx_messages: data.ctx_messages });
+        show({ ok: true, question: data.question, answer: data.answer, citations: data.citations, retrieved: data.retrieved_count, channels_searched: data.channels_searched, resolved_username: data.resolved_username });
       } else {
         setStatus("Chat failed", "err");
       }
