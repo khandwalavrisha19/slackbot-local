@@ -764,14 +764,14 @@ def _groq_complete(prompt: str, max_tokens: int = 1024, system: Optional[str] = 
     except requests.exceptions.ConnectTimeout:
         elapsed = round(time.time() - start, 2)
         logger.error("Groq connect timeout", extra={"request_id": request_id, "elapsed_s": elapsed})
-        return "⚠️ The AI service took too long to connect. Please try again in a moment.", 0
+        return "⚠️ The AI service took too long to connect. Please try again in a moment."
     except requests.exceptions.ReadTimeout:
         elapsed = round(time.time() - start, 2)
         logger.error("Groq read timeout", extra={"request_id": request_id, "elapsed_s": elapsed})
-        return "⚠️ The AI service timed out while generating a response. Try a shorter question or smaller date range.", 0
+        return "⚠️ The AI service timed out while generating a response. Try a shorter question or smaller date range."
     except requests.exceptions.RequestException as exc:
         logger.error("Groq network error", extra={"request_id": request_id, "error": str(exc)})
-        return "⚠️ Could not reach the AI service due to a network error. Please try again.", 0
+        return "⚠️ Could not reach the AI service due to a network error. Please try again."
 
     elapsed = round(time.time() - start, 2)
 
@@ -779,24 +779,23 @@ def _groq_complete(prompt: str, max_tokens: int = 1024, system: Optional[str] = 
         data = resp.json()
     except ValueError:
         logger.error("Groq non-JSON response", extra={"request_id": request_id, "status": resp.status_code})
-        return "⚠️ Received an unexpected response from the AI service.", 0
+        return "⚠️ Received an unexpected response from the AI service."
 
     if resp.status_code == 429:
         logger.warning("Groq rate limited", extra={"request_id": request_id})
-        return "⚠️ The AI service is currently rate-limited. Please wait a few seconds and try again.", 0
+        return "⚠️ The AI service is currently rate-limited. Please wait a few seconds and try again."
 
     if resp.status_code >= 500:
         logger.error("Groq 5xx error", extra={"request_id": request_id, "status": resp.status_code})
-        return "⚠️ The AI service returned a server error. Please try again shortly.", 0
+        return "⚠️ The AI service returned a server error. Please try again shortly."
 
     if resp.status_code != 200:
         logger.error("Groq unexpected status", extra={"request_id": request_id, "status": resp.status_code, "body": str(data)[:200]})
         raise HTTPException(502, f"Groq error {resp.status_code}: {data}")
 
     answer = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    tokens_used = (data.get("usage") or {}).get("total_tokens", 0)
-    logger.info("Groq call succeeded", extra={"request_id": request_id, "elapsed_s": elapsed, "tokens": tokens_used})
-    return answer, tokens_used
+    logger.info("Groq call succeeded", extra={"request_id": request_id, "elapsed_s": elapsed, "tokens": data.get("usage", {}).get("total_tokens")})
+    return answer
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1396,6 +1395,7 @@ def api_chat(body: ChatRequest, request: Request, response: Response):
         "3. Never use outside knowledge or guess.\n"
         "4. Cite message numbers like [1] or [2] for every claim.\n"
         "5. Be concise and direct.\n"
+        "6. When the question asks WHO said something, ALWAYS state the person's name from the message's sender field.\n"
         "Output format:\n"
         "Answer: <direct answer>\n"
         "Key points: <bullets or None>\n"
@@ -1403,7 +1403,7 @@ def api_chat(body: ChatRequest, request: Request, response: Response):
         "Citations: <[1], [2] etc>"
     )
     user_prompt = f"SLACK MESSAGES:\n{context}\n\nQUESTION: {body.question}"
-    answer_text, tokens_used = _groq_complete(user_prompt, MAX_TOKENS_SINGLE, system=system_prompt)
+    answer_text   = _groq_complete(user_prompt, MAX_TOKENS_SINGLE, system=system_prompt)
     cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
     citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
 
@@ -1415,8 +1415,7 @@ def api_chat(body: ChatRequest, request: Request, response: Response):
     })
     return {"ok": True, "request_id": request_id, "question": body.question, "answer": answer_text,
             "citations": citations, "retrieved_count": len(messages),
-            "resolved_username": active_username,
-            "tokens_used": tokens_used, "ctx_messages": ctx_count}
+            "resolved_username": active_username}
 
 
 @app.post("/api/chat/multi")
@@ -1463,6 +1462,7 @@ def api_chat_multi(body: MultiChatRequest, request: Request, response: Response)
         "3. Never use outside knowledge or guess.\n"
         "4. Cite message numbers like [1] or [2] for every claim.\n"
         "5. Note the channel when relevant.\n"
+        "6. When the question asks WHO said something, ALWAYS state the person's name from the message's sender field.\n"
         "Output format:\n"
         "Answer: <direct answer>\n"
         "Key points: <bullets or None>\n"
@@ -1470,7 +1470,7 @@ def api_chat_multi(body: MultiChatRequest, request: Request, response: Response)
         "Citations: <[1], [2] etc>"
     )
     user_prompt = f"SLACK MESSAGES:\n{context}\n\nQUESTION: {body.question}"
-    answer_text, tokens_used = _groq_complete(user_prompt, MAX_TOKENS_MULTI, system=system_prompt)
+    answer_text   = _groq_complete(user_prompt, MAX_TOKENS_MULTI, system=system_prompt)
     cited_indices = [int(n)-1 for n in re.findall(r"\[(\d+)\]", answer_text) if n.isdigit() and 0 < int(n) <= len(messages)]
     citations     = [messages[i] for i in dict.fromkeys(cited_indices)]
 
@@ -1483,8 +1483,7 @@ def api_chat_multi(body: MultiChatRequest, request: Request, response: Response)
     })
     return {"ok": True, "request_id": request_id, "question": body.question, "answer": answer_text,
             "citations": citations, "retrieved_count": len(messages),
-            "channels_searched": len(body.channel_ids), "resolved_username": active_username,
-            "tokens_used": tokens_used, "ctx_messages": ctx_count}
+            "channels_searched": len(body.channel_ids), "resolved_username": active_username}
 
 
 handler = Mangum(app)
