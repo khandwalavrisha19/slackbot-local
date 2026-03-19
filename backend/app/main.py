@@ -703,6 +703,14 @@ def retrieve_messages_multi(
     if not all_raw:
         return []
 
+    # When a specific user is already filtered, skip keyword scoring —
+    # return their messages newest-first. Scoring on user-filtered sets
+    # causes false negatives (e.g. "summarize messages from @user" has
+    # keywords like "summarize"/"messages" that never appear in message text).
+    if user_id:
+        all_raw.sort(key=lambda m: m.get("sk") or m.get("ts") or "", reverse=True)
+        return _format_messages(all_raw[:top_k])
+
     content_kws = _content_keywords(q) if q and q.strip() else []
 
     if content_kws:
