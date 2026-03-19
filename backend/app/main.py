@@ -668,7 +668,6 @@ def retrieve_messages_multi(
     limit: int = 200, top_k: int = 10,
     username: Optional[str] = None, bot_token: Optional[str] = None,
 ) -> list[dict]:
-    # Resolve username once up-front
     if username and not user_id and bot_token:
         resolved = resolve_user_id(team_id, username, bot_token)
         if resolved:
