@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 from constants import (
     CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, SLACK_SCOPES, SLACK_SIGNING_SECRET,
     FRONTEND_PATH, SESSION_COOKIE_NAME, AWS_REGION, DDB_TABLE, SESSIONS_TABLE,
-    MAX_BODY_BYTES, MAX_TOKENS_SINGLE, MAX_TOKENS_MULTI, SLACK_API_BASE,
+    MAX_BODY_BYTES, MAX_TOKENS_SINGLE, MAX_TOKENS_MULTI, SLACK_API_BASE, SLACK_OAUTH_BASE,
 )
 from logger import logger
 from utils import (
@@ -83,7 +83,7 @@ def install():
         return HTMLResponse("<h3>Missing ENV</h3>", status_code=500)
     params = {"client_id": CLIENT_ID, "scope": SLACK_SCOPES,
               "redirect_uri": REDIRECT_URI, "state": "slackbot_mvp"}
-    return RedirectResponse(f"{SLACK_API_BASE}/oauth/v2/authorize?" + urlencode(params))
+    return RedirectResponse(f"{SLACK_OAUTH_BASE}/authorize?" + urlencode(params))
 
 
 @router.get("/oauth/callback")

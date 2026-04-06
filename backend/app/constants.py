@@ -1,8 +1,11 @@
 import os
 from pathlib import Path
 
-# ── SLACK API BASE ─────────────────────────────────────────────────────────────
-SLACK_API_BASE = "https://slack.com/api"
+# ── SLACK BASE URLS ───────────────────────────────────────────────────────────
+# All Web API calls  → https://slack.com/api/<method>
+# OAuth authorize    → https://slack.com/oauth/v2/authorize  (different path root)
+SLACK_API_BASE   = "https://slack.com/api"
+SLACK_OAUTH_BASE = "https://slack.com/oauth/v2"
 
 # ── REQUEST SIZE LIMITS ───────────────────────────────────────────────────────
 MAX_BODY_BYTES   = 64 * 1024   # 64 KB hard limit for all POST bodies
