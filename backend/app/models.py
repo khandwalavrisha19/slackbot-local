@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.constants import MAX_QUESTION_LEN, MAX_CHANNEL_IDS
 from app.utils import _validate_date, _validate_team_id, _validate_channel_id
 
+
 class ChatRequest(BaseModel):
     team_id:    str           = Field(..., min_length=1, max_length=20)
     channel_id: str           = Field(..., min_length=1, max_length=20)

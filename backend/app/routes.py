@@ -11,27 +11,27 @@ from fastapi import APIRouter, Request, Query, HTTPException, Response
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from urllib.parse import urlencode
 
-from constants import (
+from app.constants import (
     CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, SLACK_SCOPES, SLACK_SIGNING_SECRET,
     FRONTEND_PATH, SESSION_COOKIE_NAME, AWS_REGION, DDB_TABLE, SESSIONS_TABLE,
     MAX_BODY_BYTES, MAX_TOKENS_SINGLE, MAX_TOKENS_MULTI, SLACK_API_BASE, SLACK_OAUTH_BASE,
 )
-from logger import logger
-from utils import (
+from app.logger import logger
+from app.utils import (
     no_cache, secret_name, read_secret, upsert_secret, mask_token,
     verify_slack_signature, require_ddb, ddb_table, secrets_client,
     resolve_username_for_message, extract_username_from_question,
 )
-from session import (
+from app.session import (
     get_or_create_session, require_team_access, create_session,
     get_session, bind_team_to_session, unbind_team_from_session, _set_session_cookie,
 )
-from retrieval import (
+from app.retrieval import (
     retrieve_messages, retrieve_messages_multi,
     _build_context, _augment_question_with_senders,
 )
-from groq_client import _groq_complete
-from models import ChatRequest, MultiChatRequest
+from app.groq_client import _groq_complete
+from app.models import ChatRequest, MultiChatRequest
 
 router = APIRouter()
 

@@ -15,7 +15,6 @@ Module layout
   routes.py       → All FastAPI route handlers (APIRouter)
   main.py         → App factory, middleware/CORS wiring, Mangum handler
 """
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum

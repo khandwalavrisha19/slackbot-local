@@ -14,6 +14,7 @@ from fastapi import HTTPException, Response
 
 from app.constants import AWS_REGION, SECRET_PREFIX, DDB_TABLE, SESSIONS_TABLE, SLACK_API_BASE
 from app.logger import logger
+
 # ── AWS CLIENTS ───────────────────────────────────────────────────────────────
 secrets_client = boto3.client("secretsmanager", region_name=AWS_REGION)
 dynamodb       = boto3.resource("dynamodb", region_name=AWS_REGION)
