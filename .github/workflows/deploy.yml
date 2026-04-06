@@ -165,11 +165,23 @@ jobs:
         shell: bash
         run: |
           test -f frontend/index.html || { echo "frontend/index.html not found"; exit 1; }
+          test -f frontend/style.css  || { echo "frontend/style.css not found";  exit 1; }
+          test -f frontend/app.js     || { echo "frontend/app.js not found";     exit 1; }
 
           aws s3 cp frontend/index.html "s3://$FRONTEND_BUCKET/index.html" \
             --region "$AWS_REGION" \
             --cache-control "public,max-age=0,must-revalidate" \
             --content-type "text/html"
+
+          aws s3 cp frontend/style.css "s3://$FRONTEND_BUCKET/style.css" \
+            --region "$AWS_REGION" \
+            --cache-control "public,max-age=31536000,immutable" \
+            --content-type "text/css"
+
+          aws s3 cp frontend/app.js "s3://$FRONTEND_BUCKET/app.js" \
+            --region "$AWS_REGION" \
+            --cache-control "public,max-age=31536000,immutable" \
+            --content-type "application/javascript"
 
       - name: Invalidate CloudFront cache
         shell: bash

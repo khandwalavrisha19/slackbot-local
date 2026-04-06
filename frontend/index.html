@@ -1,1321 +1,249 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <title>Slack Chatbot Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --bg: #eef0f7;
-      --surface: #f7f5fc;
-      --surface2: #ece9f5;
-      --border: rgba(140,120,200,0.13);
-      --border-hover: rgba(140,120,200,0.24);
-      --text: #2c2840;
-      --text-muted: #a49dbf;
-      --text-soft: #7b73a0;
-      --accent: #9b7fe8;
-      --accent-glow: rgba(155,127,232,0.14);
-      --danger: #e07a8a;
-      --danger-bg: rgba(224,122,138,0.09);
-      --success: #6dbfa0;
-      --radius: 10px;
-      --radius-sm: 6px;
-    }
-
-    body {
-      font-family: 'DM Sans', sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      font-size: 14px;
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    body::before {
-      content: '';
-      position: fixed;
-      inset: 0;
-      background:
-        radial-gradient(ellipse 60% 40% at 15% 10%, rgba(185,160,245,0.18) 0%, transparent 65%),
-        radial-gradient(ellipse 50% 40% at 85% 80%, rgba(130,210,190,0.13) 0%, transparent 65%),
-        radial-gradient(ellipse 40% 30% at 70% 20%, rgba(245,170,185,0.10) 0%, transparent 60%);
-      pointer-events: none;
-      z-index: 0;
-    }
-
-    header {
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 28px;
-      height: 56px;
-      background: rgba(238,240,247,0.85);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border-bottom: 1px solid var(--border);
-    }
-
-    .header-left { display: flex; align-items: center; gap: 10px; }
-
-    .logo-icon {
-      width: 26px; height: 26px;
-      background: var(--accent);
-      border-radius: 7px;
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0;
-    }
-    .logo-icon svg { display: block; }
-
-    h1 { font-size: 14px; font-weight: 500; color: var(--text); letter-spacing: -0.01em; }
-
-    .pill {
-      font-size: 11px;
-      font-family: 'DM Mono', monospace;
-      font-weight: 500;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text-soft);
-      transition: all 0.3s ease;
-      letter-spacing: 0.02em;
-    }
-    .pill.ok   { border-color: rgba(109,191,160,0.35); color: #3d9e7e; background: rgba(109,191,160,0.12); }
-    .pill.warn { border-color: rgba(220,170,80,0.35);  color: #9e7820; background: rgba(220,170,80,0.10); }
-    .pill.err  { border-color: rgba(224,122,138,0.35); color: var(--danger); background: var(--danger-bg); }
-    .session-badge {
-      font-size: 11px; font-family: 'DM Mono', monospace;
-      color: var(--text-muted); letter-spacing: 0.02em;
-      display: flex; align-items: center; gap: 8px;
-    }
-    .session-dot {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: var(--success); flex-shrink: 0;
-      box-shadow: 0 0 0 2px rgba(109,191,160,0.25);
-    }
-    button.logout-btn {
-      padding: 4px 10px; font-size: 11px;
-      border-color: rgba(224,122,138,0.2); color: var(--text-muted);
-      background: transparent;
-    }
-    button.logout-btn:hover { color: var(--danger); border-color: rgba(224,122,138,0.4); background: var(--danger-bg); }
-
-
-    .wrap {
-      position: relative; z-index: 1;
-      display: grid; grid-template-columns: 360px 1fr;
-      gap: 16px; padding: 20px 24px;
-      max-width: 1200px; margin: 0 auto;
-    }
-
-    .sidebar { display: flex; flex-direction: column; gap: 10px; }
-
-    .panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-      transition: border-color 0.2s;
-      animation: fadeIn 0.3s ease both;
-    }
-    .panel:nth-child(1) { animation-delay: 0.00s; }
-    .panel:nth-child(2) { animation-delay: 0.07s; }
-    .panel:nth-child(3) { animation-delay: 0.14s; }
-    .panel:hover { border-color: var(--border-hover); }
-
-    .panel-header {
-      display: flex; align-items: center; gap: 8px;
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .step-badge {
-      font-size: 10px; font-family: 'DM Mono', monospace; font-weight: 500;
-      color: var(--text-muted); background: var(--surface2);
-      border: 1px solid var(--border); border-radius: 4px;
-      padding: 2px 6px; letter-spacing: 0.05em;
-    }
-
-    .panel-title {
-      font-size: 12px; font-weight: 600; color: var(--text-soft);
-      letter-spacing: 0.03em; text-transform: uppercase;
-    }
-
-    .panel-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-
-    .hint { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
-
-    label {
-      display: block; font-size: 11px; font-weight: 500;
-      color: var(--text-muted); letter-spacing: 0.04em;
-      text-transform: uppercase; margin-bottom: 5px;
-    }
-
-    input:not([type=checkbox]), select {
-      width: 100%; padding: 9px 12px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border);
-      background: var(--bg); color: var(--text);
-      font-family: 'DM Sans', sans-serif; font-size: 13px;
-      outline: none; transition: border-color 0.2s, box-shadow 0.2s;
-      appearance: none; -webkit-appearance: none;
-    }
-    input[type=checkbox] {
-      appearance: auto; -webkit-appearance: checkbox;
-      width: 15px; height: 15px;
-      flex-shrink: 0; cursor: pointer;
-      margin: 0; padding: 0;
-      accent-color: var(--accent);
-      border: none; background: none;
-      border-radius: 0;
-    }
-    select {
-      background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23a49dbf' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-      background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px;
-    }
-    input:not([type=checkbox]):focus, select:focus {
-      border-color: rgba(155,127,232,0.45);
-      box-shadow: 0 0 0 3px var(--accent-glow);
-    }
-    input:not([type=checkbox])::placeholder { color: var(--text-muted); font-size: 12px; }
-
-    .btn-group { display: flex; flex-wrap: wrap; gap: 6px; }
-
-    button {
-      padding: 7px 13px; border-radius: var(--radius-sm);
-      border: 1px solid var(--border); background: var(--surface2);
-      color: var(--text-soft); cursor: pointer;
-      font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500;
-      transition: all 0.15s ease; white-space: nowrap; letter-spacing: 0.01em;
-    }
-    button:hover { background: rgba(155,127,232,0.08); border-color: var(--border-hover); color: var(--text); }
-    button:active { transform: scale(0.98); }
-
-    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    button.primary:hover { background: #b096f0; border-color: #b096f0; }
-
-    button.danger { border-color: rgba(224,122,138,0.25); color: var(--danger); background: transparent; }
-    button.danger:hover { background: var(--danger-bg); border-color: rgba(224,122,138,0.45); }
-
-    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .field { display: flex; flex-direction: column; }
-
-    .output-panel {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); display: flex; flex-direction: column;
-      position: sticky; top: 76px; height: calc(100vh - 96px); overflow: hidden;
-    }
-    .output-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
-    }
-    .output-title { font-size: 12px; font-weight: 600; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.04em; }
-
-    .status-bar { font-size: 12px; font-family: 'DM Mono', monospace; color: var(--text-muted); transition: color 0.3s; }
-    .status-bar.ok   { color: #3d9e7e; }
-    .status-bar.err  { color: var(--danger); }
-    .status-bar.warn { color: #9e7820; }
-
-    .output-body { flex: 1; overflow-y: auto; padding: 14px 16px; }
-    .output-body::-webkit-scrollbar { width: 4px; }
-    .output-body::-webkit-scrollbar-track { background: transparent; }
-    .output-body::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 2px; }
-
-    pre {
-      font-family: 'DM Mono', monospace; font-size: 12px;
-      line-height: 1.65; color: var(--text-soft);
-      white-space: pre-wrap; word-break: break-word;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(4px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-
-    @media (max-width: 900px) {
-      .wrap { grid-template-columns: 1fr; }
-      .output-panel { position: static; height: auto; min-height: 300px; }
-    }
-  </style>
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
 
-<header>
-  <div class="header-left">
-    <div class="logo-icon">
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-        <rect x="2" y="2" width="4" height="4" rx="1" fill="white" opacity="0.95"/>
-        <rect x="8" y="2" width="4" height="4" rx="1" fill="white" opacity="0.65"/>
-        <rect x="2" y="8" width="4" height="4" rx="1" fill="white" opacity="0.65"/>
-        <rect x="8" y="8" width="4" height="4" rx="1" fill="white" opacity="0.95"/>
-      </svg>
+  <header>
+    <div class="header-left">
+      <div class="logo-icon">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <rect x="2" y="2" width="4" height="4" rx="1" fill="white" opacity="0.95" />
+          <rect x="8" y="2" width="4" height="4" rx="1" fill="white" opacity="0.65" />
+          <rect x="2" y="8" width="4" height="4" rx="1" fill="white" opacity="0.65" />
+          <rect x="8" y="8" width="4" height="4" rx="1" fill="white" opacity="0.95" />
+        </svg>
+      </div>
+      <h1>Slack Chatbot Dashboard</h1>
     </div>
-    <h1>Slack Chatbot Dashboard</h1>
-  </div>
-  <div style="display:flex;align-items:center;gap:10px;">
-    <div class="session-badge" id="sessionBadge" style="display:none;">
-      <span class="session-dot"></span>
-      <span id="sessionId" title="Your session ID">···</span>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="session-badge" id="sessionBadge" style="display:none;">
+        <span class="session-dot"></span>
+        <span id="sessionId" title="Your session ID">···</span>
+      </div>
+      <button class="logout-btn" id="logoutBtn" onclick="logout()" style="display:none;">Sign out</button>
+      <span class="pill" id="pill">Idle</span>
     </div>
-    <button class="logout-btn" id="logoutBtn" onclick="logout()" style="display:none;">Sign out</button>
-    <span class="pill" id="pill">Idle</span>
-  </div>
-</header>
+  </header>
 
-<div class="wrap">
-  <div class="sidebar">
+  <div class="wrap">
+    <div class="sidebar">
 
-    <!-- Connect -->
-    <div class="panel">
-      <div class="panel-header">
-        <span class="step-badge">01</span>
-        <span class="panel-title">Connect</span>
-      </div>
-      <div class="panel-body">
-        <p class="hint">Connect a Slack workspace via OAuth. The UI will auto-select the workspace after install.</p>
-        <div class="btn-group">
-          <button class="primary" onclick="connectSlack()">Connect Slack</button>
-          <button onclick="location.reload()">Refresh</button>
+      <!-- Connect -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="step-badge">01</span>
+          <span class="panel-title">Connect</span>
         </div>
-        <div class="field">
-          <label>Workspace</label>
-          <select id="workspaceSelect">
-            <option value="">— No workspaces loaded —</option>
-          </select>
-        </div>
-        <div class="btn-group">
-          <button onclick="loadWorkspaces()">Load Workspaces</button>
-          <button class="primary" onclick="loadChannels()" id="loadChannelsBtn">Load Channels</button>
-        </div>
-        <div class="btn-group">
-          <!-- <button onclick="checkToken()">Token Status</button> -->
-          <button class="danger" onclick="disconnectWorkspace()">Disconnect</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Channel -->
-    <div class="panel">
-      <div class="panel-header">
-        <span class="step-badge">02</span>
-        <span class="panel-title">Channel</span>
-      </div>
-      <div class="panel-body">
-        <div class="field">
-          <label>Channel</label>
-          <select id="channelSelect">
-            <option value="">— Load channels first —</option>
-          </select>
-        </div>
-        <div class="btn-group" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-          <button onclick="joinSelectedAndBackfill()" title="Join the selected channel and backfill its messages into DB">Join + Backfill</button>
-          <button onclick="joinAllPublicOnly()" title="Join all public channels (no backfill)">Join All Public</button>
-          <button onclick="backfillAllPublic()" title="Backfill messages from all public channels the bot has joined">Backfill Public</button>
-          <button onclick="backfillAllPrivate()" title="Backfill messages from all private channels the bot has been invited to">Backfill Private</button>
-        </div>
-        <div style="margin-top:2px;">
-          <button onclick="loadMessagesFromDB()" style="width:100%;">Load from DB</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Search -->
-    <div class="panel">
-      <div class="panel-header">
-        <span class="step-badge">03</span>
-        <span class="panel-title">Search Messages</span>
-        <div style="margin-left:auto;">
-          <button id="searchModeToggle" onclick="toggleSearchMode()" style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--surface2);border:1px solid var(--border);color:var(--text-soft);">+ Multi-Channel</button>
-        </div>
-      </div>
-      <div class="panel-body">
-        <p class="hint" id="searchHint">Search your Slack messages stored in DynamoDB. Add filters to narrow results.</p>
-
-        <!-- Single channel indicator -->
-        <div id="searchSingleChannelInfo" style="display:none;font-size:12px;color:var(--text-muted);padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);">
-          Searching in: <span id="searchSingleChannelName" style="color:var(--accent);font-weight:500;">#channel</span>
-        </div>
-
-        <!-- Multi-channel picker -->
-        <div id="multiSearchChannelPicker" style="display:none;">
-          <label>Select Channels to Search</label>
-          <div id="multiSearchChannelList" style="max-height:130px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);padding:6px 8px;display:flex;flex-direction:column;gap:4px;">
-            <span style="font-size:12px;color:var(--text-muted);">Load channels first (Step 02)</span>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:5px;">
-            <button onclick="selectAllSearchChannels()" style="font-size:11px;padding:3px 8px;">Select All</button>
-            <button onclick="clearAllSearchChannels()" style="font-size:11px;padding:3px 8px;">Clear All</button>
-          </div>
-        </div>
-
-        <div class="field">
-          <label>Keyword</label>
-          <input id="keyword" placeholder="e.g. deployment error" />
-        </div>
-        <div class="row-2">
-          <div class="field">
-            <label>From</label>
-            <input id="fromDate" type="date" />
+        <div class="panel-body">
+          <p class="hint">Connect a Slack workspace via OAuth. The UI will auto-select the workspace after install.</p>
+          <div class="btn-group">
+            <button class="primary" onclick="connectSlack()">Connect Slack</button>
+            <button onclick="location.reload()">Refresh</button>
           </div>
           <div class="field">
-            <label>To</label>
-            <input id="toDate" type="date" />
+            <label>Workspace</label>
+            <select id="workspaceSelect">
+              <option value="">— No workspaces loaded —</option>
+            </select>
           </div>
-        </div>
-        <div class="field">
-          <label>Username (optional)</label>
-          <input id="searchUserId" placeholder="e.g. vrisha" />
-        </div>
-        <div class="btn-group">
-          <button class="primary" id="searchBtn" onclick="searchMessages()">Search</button>
-          <button onclick="clearSearch()">Clear</button>
+          <div class="btn-group">
+            <button onclick="loadWorkspaces()">Load Workspaces</button>
+            <button class="primary" onclick="loadChannels()" id="loadChannelsBtn">Load Channels</button>
+          </div>
+          <div class="btn-group">
+            <button class="danger" onclick="disconnectWorkspace()">Disconnect</button>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- Chat (Day 2 — input ready, endpoint wired when backend exists) -->
-    <div class="panel">
-      <div class="panel-header">
-        <span class="step-badge">04</span>
-        <span class="panel-title">Ask AI</span>
-        <div style="margin-left:auto;">
-          <button id="chatModeToggle" onclick="toggleChatMode()" style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--surface2);border:1px solid var(--border);color:var(--text-soft);">+ Multi-Channel</button>
+      <!-- Channel -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="step-badge">02</span>
+          <span class="panel-title">Channel</span>
+        </div>
+        <div class="panel-body">
+          <div class="field">
+            <label>Channel</label>
+            <select id="channelSelect">
+              <option value="">— Load channels first —</option>
+            </select>
+          </div>
+          <div class="btn-group" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+            <button onclick="joinSelectedAndBackfill()"
+              title="Join the selected channel and backfill its messages into DB">Join + Backfill</button>
+            <button onclick="joinAllPublicOnly()" title="Join all public channels (no backfill)">Join All
+              Public</button>
+            <button onclick="backfillAllPublic()"
+              title="Backfill messages from all public channels the bot has joined">Backfill Public</button>
+            <button onclick="backfillAllPrivate()"
+              title="Backfill messages from all private channels the bot has been invited to">Backfill Private</button>
+          </div>
+          <div style="margin-top:2px;">
+            <button onclick="loadMessagesFromDB()" style="width:100%;">Load from DB</button>
+          </div>
         </div>
       </div>
-      <div class="panel-body">
-        <p class="hint">Ask a question about your Slack messages. The AI answers using only your data.</p>
 
-        <!-- Single channel indicator -->
-        <div id="chatSingleChannelInfo" style="display:none;font-size:12px;color:var(--text-muted);padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);">
-          Asking in: <span id="chatSingleChannelName" style="color:var(--accent);font-weight:500;">#channel</span>
-        </div>
-
-        <!-- Multi-channel picker for chat -->
-        <div id="multiChatChannelPicker" style="display:none;">
-          <label>Select Channels to Query</label>
-          <div id="multiChatChannelList" style="max-height:130px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);padding:6px 8px;display:flex;flex-direction:column;gap:4px;">
-            <span style="font-size:12px;color:var(--text-muted);">Load channels first (Step 02)</span>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:5px;">
-            <button onclick="selectAllChatChannels()" style="font-size:11px;padding:3px 8px;">Select All</button>
-            <button onclick="clearAllChatChannels()" style="font-size:11px;padding:3px 8px;">Clear All</button>
+      <!-- Search -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="step-badge">03</span>
+          <span class="panel-title">Search Messages</span>
+          <div style="margin-left:auto;">
+            <button id="searchModeToggle" onclick="toggleSearchMode()"
+              style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--surface2);border:1px solid var(--border);color:var(--text-soft);">+
+              Multi-Channel</button>
           </div>
         </div>
+        <div class="panel-body">
+          <p class="hint" id="searchHint">Search your Slack messages stored in DynamoDB. Add filters to narrow results.
+          </p>
 
-        <div class="field">
-          <label>Your Question</label>
-          <textarea id="chatQuestion"
-            placeholder="e.g. What did we decide about the API design? or What did @vrisha say last?"
-            style="width:100%;min-height:72px;resize:vertical;padding:9px 12px;
+          <div id="searchSingleChannelInfo"
+            style="display:none;font-size:12px;color:var(--text-muted);padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);">
+            Searching in: <span id="searchSingleChannelName"
+              style="color:var(--accent);font-weight:500;">#channel</span>
+          </div>
+
+          <div id="multiSearchChannelPicker" style="display:none;">
+            <label>Select Channels to Search</label>
+            <div id="multiSearchChannelList"
+              style="max-height:130px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);padding:6px 8px;display:flex;flex-direction:column;gap:4px;">
+              <span style="font-size:12px;color:var(--text-muted);">Load channels first (Step 02)</span>
+            </div>
+            <div style="display:flex;gap:6px;margin-top:5px;">
+              <button onclick="selectAllSearchChannels()" style="font-size:11px;padding:3px 8px;">Select All</button>
+              <button onclick="clearAllSearchChannels()" style="font-size:11px;padding:3px 8px;">Clear All</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Keyword</label>
+            <input id="keyword" placeholder="e.g. deployment error" />
+          </div>
+          <div class="row-2">
+            <div class="field"><label>From</label><input id="fromDate" type="date" /></div>
+            <div class="field"><label>To</label><input id="toDate" type="date" /></div>
+          </div>
+          <div class="field">
+            <label>Username (optional)</label>
+            <input id="searchUserId" placeholder="e.g. vrisha" />
+          </div>
+          <div class="btn-group">
+            <button class="primary" id="searchBtn" onclick="searchMessages()">Search</button>
+            <button onclick="clearSearch()">Clear</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ask AI -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="step-badge">04</span>
+          <span class="panel-title">Ask AI</span>
+          <div style="margin-left:auto;">
+            <button id="chatModeToggle" onclick="toggleChatMode()"
+              style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--surface2);border:1px solid var(--border);color:var(--text-soft);">+
+              Multi-Channel</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <p class="hint">Ask a question about your Slack messages. The AI answers using only your data.</p>
+
+          <div id="chatSingleChannelInfo"
+            style="display:none;font-size:12px;color:var(--text-muted);padding:6px 10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border);">
+            Asking in: <span id="chatSingleChannelName" style="color:var(--accent);font-weight:500;">#channel</span>
+          </div>
+
+          <div id="multiChatChannelPicker" style="display:none;">
+            <label>Select Channels to Query</label>
+            <div id="multiChatChannelList"
+              style="max-height:130px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);padding:6px 8px;display:flex;flex-direction:column;gap:4px;">
+              <span style="font-size:12px;color:var(--text-muted);">Load channels first (Step 02)</span>
+            </div>
+            <div style="display:flex;gap:6px;margin-top:5px;">
+              <button onclick="selectAllChatChannels()" style="font-size:11px;padding:3px 8px;">Select All</button>
+              <button onclick="clearAllChatChannels()" style="font-size:11px;padding:3px 8px;">Clear All</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Your Question</label>
+            <textarea id="chatQuestion"
+              placeholder="e.g. What did we decide about the API design? or What did @vrisha say last?" style="width:100%;min-height:72px;resize:vertical;padding:9px 12px;
                    border-radius:6px;border:1px solid var(--border);
                    background:var(--bg);color:var(--text);
                    font-family:'DM Sans',sans-serif;font-size:13px;
                    outline:none;transition:border-color .2s,box-shadow .2s;"></textarea>
-        </div>
+          </div>
 
-        <div class="field">
-          <label>Date Range <span style="font-weight:400;color:var(--text-muted)">(optional — narrow AI context to a time window)</span></label>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <div style="flex:1;">
-              <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">From</div>
-              <input type="date" id="chatFromDate" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;font-family:'DM Sans',sans-serif;" />
-            </div>
-            <div style="color:var(--text-muted);margin-top:16px;">→</div>
-            <div style="flex:1;">
-              <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">To</div>
-              <input type="date" id="chatToDate" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;font-family:'DM Sans',sans-serif;" />
+          <div class="field">
+            <label>Date Range <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <div style="flex:1;">
+                <div
+                  style="font-size:10px;color:var(--text-muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">
+                  From</div>
+                <input type="date" id="chatFromDate"
+                  style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;font-family:'DM Sans',sans-serif;" />
+              </div>
+              <div style="color:var(--text-muted);margin-top:16px;">→</div>
+              <div style="flex:1;">
+                <div
+                  style="font-size:10px;color:var(--text-muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em;">
+                  To</div>
+                <input type="date" id="chatToDate"
+                  style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;font-family:'DM Sans',sans-serif;" />
+              </div>
             </div>
           </div>
-        </div>
 
-        <div class="btn-group">
-          <button class="primary" id="askBtn" onclick="askChat()">Ask</button>
-          <button onclick="document.getElementById('chatFromDate').value='';document.getElementById('chatToDate').value='';"
-                style="font-size:11px;padding:5px 10px;color:var(--text-muted);background:transparent;border:1px solid var(--border);border-radius:5px;cursor:pointer;">Clear Date</button>
-        </div>
-        <div id="chatAnswer" style="display:none;margin-top:8px;padding:10px 12px;
-             border-radius:6px;background:var(--surface2);border:1px solid var(--border);">
-          <div style="font-size:11px;font-weight:600;color:var(--text-muted);
-               text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Answer</div>
-          <div id="chatAnswerText" style="font-size:13px;color:var(--text);line-height:1.6;"></div>
-          <div id="chatCitations" style="margin-top:10px;"></div>
+          <div class="btn-group">
+            <button class="primary" id="askBtn" onclick="askChat()">Ask</button>
+            <button
+              onclick="document.getElementById('chatFromDate').value='';document.getElementById('chatToDate').value='';"
+              style="font-size:11px;padding:5px 10px;color:var(--text-muted);background:transparent;border:1px solid var(--border);border-radius:5px;cursor:pointer;">Clear
+              Date</button>
+          </div>
+
+          <div id="chatAnswer"
+            style="display:none;margin-top:8px;padding:10px 12px;border-radius:6px;background:var(--surface2);border:1px solid var(--border);">
+            <div
+              style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">
+              Answer</div>
+            <div id="chatAnswerText" style="font-size:13px;color:var(--text);line-height:1.6;"></div>
+            <div id="chatCitations" style="margin-top:10px;"></div>
+          </div>
         </div>
       </div>
-    </div>
 
+    </div><!-- /sidebar -->
+
+    <!-- Output -->
+    <div class="output-panel">
+      <div class="output-header">
+        <span class="output-title">Output</span>
+        <span class="status-bar" id="status">Idle</span>
+      </div>
+      <div class="output-body">
+        <div id="out"></div>
+      </div>
+    </div>
   </div>
 
-  <!-- Output -->
-  <div class="output-panel">
-    <div class="output-header">
-      <span class="output-title">Output</span>
-      <span class="status-bar" id="status">Idle</span>
-    </div>
-    <div class="output-body">
-      <div id="out"></div>
-    </div>
-  </div>
-</div>
-
-<script>
-  let oauthPopup = null;
-
-  function getApiBase(){ return window.location.origin + "/api"; }
-  function bust(url){ return url + (url.includes("?") ? "&" : "?") + "_ts=" + Date.now(); }
-  function setStatus(msg, type){ const s=document.getElementById("status"); const p=document.getElementById("pill"); s.textContent=msg; s.className="status-bar" + (type?" "+type:""); p.textContent=msg.length>24?msg.slice(0,24)+"…":msg; p.className="pill" + (type?" "+type:""); }
-  function show(obj){
-    const el = document.getElementById("out");
-    if (!obj) { el.innerHTML = ""; return; }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
-    function esc(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-    function stripSlack(t){ return (t||"").replace(/<https?:\/\/[^|>]+\|([^>]+)>/g,"$1").replace(/<https?:\/\/[^>]+>/g,"[link]").replace(/[*_`]/g,""); }
-    function tag(el, cls, html){ return `<${el} class="${cls}">${html}</${el}>`; }
-    function badge(txt, color){ return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:600;font-family:'DM Mono',monospace;background:${color}22;color:${color};border:1px solid ${color}44;">${esc(txt)}</span>`; }
-
-    function msgCard(m, idx){
-      const name   = esc(m.username || m.user_id || "unknown");
-      const time   = esc(m.timestamp_human || m.ts || m.sk || "");
-      const ch     = m.channel_id ? `<span style="color:var(--accent);font-size:10px;">#${esc(m.channel_id)}</span>` : "";
-      const text   = esc(stripSlack(m.text || m.snippet || "")).replace(/\n/g,"<br>");
-      const num    = idx != null ? `<span style="color:var(--text-muted);font-size:10px;font-family:'DM Mono',monospace;flex-shrink:0;">[${idx+1}]</span>` : "";
-      return `
-        <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--surface);">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-            ${num}
-            <span style="font-size:12px;font-weight:600;color:var(--text);">${name}</span>
-            ${ch}
-            <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">${time}</span>
-          </div>
-          <div style="font-size:13px;color:var(--text-soft);line-height:1.55;">${text || '<em style="color:var(--text-muted);">no text</em>'}</div>
-        </div>`;
-    }
-
-    function statRow(label, val){
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);">
-        <span style="font-size:12px;color:var(--text-muted);">${esc(label)}</span>
-        <span style="font-size:12px;font-weight:600;color:var(--text);font-family:'DM Mono',monospace;">${esc(String(val))}</span>
-      </div>`;
-    }
-
-    function section(title, content){
-      return `<div style="margin-bottom:16px;">
-        <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">${title}</div>
-        ${content}
-      </div>`;
-    }
-
-    // ── error ─────────────────────────────────────────────────────────────────
-    if (obj.ok === false || obj.error){
-      el.innerHTML = `<div style="padding:12px;border-radius:8px;background:var(--danger-bg);border:1px solid rgba(224,122,138,0.3);">
-        <div style="font-size:12px;font-weight:700;color:var(--danger);margin-bottom:4px;">Error</div>
-        <div style="font-size:12px;color:var(--text-soft);font-family:'DM Mono',monospace;">${esc(obj.error || obj.slack_error?.error || JSON.stringify(obj))}</div>
-      </div>`;
-      return;
-    }
-
-    let html = "";
-
-    // ── DB messages (loadMessagesFromDB) ──────────────────────────────────────
-    if (obj.items && Array.isArray(obj.items)){
-      const items = obj.items.filter(m => !(m.subtype === "channel_join" || m.subtype === "channel_leave"));
-      const joins = obj.items.length - items.length;
-      html += section("Messages from DB",
-        `<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">`
-        + `Showing <strong>${items.length}</strong> messages`
-        + (joins ? ` <span style="color:var(--text-muted);">(${joins} join/leave events hidden)</span>` : "")
-        + `</div>`
-        + (items.length ? items.map((m,i) => msgCard(m,i)).join("") : `<div style="color:var(--text-muted);font-size:13px;">No messages found.</div>`)
-      );
-    }
-
-    // ── search results ────────────────────────────────────────────────────────
-    else if (obj.messages && Array.isArray(obj.messages)){
-      const filters = obj.filters || {};
-      const filterBadges = [
-        filters.username && badge("@"+filters.username, "#0d9488"),
-        filters.from    && badge("from "+filters.from, "#2563eb"),
-        filters.to      && badge("to "+filters.to, "#2563eb"),
-        obj.query       && badge("\""+obj.query+"\"", "#5b4fcf"),
-      ].filter(Boolean).join(" ");
-
-      html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
-        <span style="font-size:13px;font-weight:600;color:var(--text);">${obj.count || 0} result${obj.count===1?"":"s"}</span>
-        ${obj.channels_searched > 1 ? badge(obj.channels_searched+" channels","#9b7fe8") : ""}
-        ${filterBadges}
-      </div>`;
-
-      if (obj.messages.length){
-        html += obj.messages.map((m,i) => msgCard(m,i)).join("");
-      } else {
-        html += `<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px;">No messages matched your search.</div>`;
-      }
-    }
-
-    // ── backfill / join results ───────────────────────────────────────────────
-    else if (obj.backfill_all || obj.join_all || obj.backfill || obj.join){
-      if (obj.join_all){
-        html += section("Join All Channels",
-          statRow("Joined", obj.join_all.joined_count ?? "—") +
-          statRow("Failed", obj.join_all.failed_count ?? "—")
-        );
-      }
-      if (obj.backfill_all){
-        const res = obj.backfill_all.results || [];
-        const ok  = res.filter(r=>r.ok);
-        html += section("Backfill Summary",
-          statRow("Total stored", obj.backfill_all.total_stored ?? "—") +
-          statRow("Channels processed", res.length) +
-          statRow("Successful", ok.length)
-        );
-        if (ok.length){
-          html += section("Per-channel",
-            ok.map(r=>`<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px;">
-              <span style="color:var(--text-soft);font-family:'DM Mono',monospace;">${esc(r.channel)}</span>
-              <span style="color:var(--success);font-weight:600;">${r.stored} stored</span>
-            </div>`).join("")
-          );
-        }
-      }
-      if (obj.join && !obj.join_all){
-        html += section("Channel Joined", statRow("Channel", obj.join.channel_id||"✓"));
-      }
-      if (obj.backfill && !obj.backfill_all){
-        html += section("Backfill Complete",
-          statRow("Stored", obj.backfill.stored ?? "—") +
-          statRow("Has more", obj.backfill.has_more ? "Yes (paginate)" : "No")
-        );
-      }
-    }
-
-    // ── workspaces ────────────────────────────────────────────────────────────
-    else if (obj.workspaces){
-      html += section("Connected Workspaces",
-        obj.workspaces.length
-          ? obj.workspaces.map(w=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;background:var(--surface2);margin-bottom:6px;">
-              <span style="font-size:18px;">💼</span>
-              <div>
-                <div style="font-size:13px;font-weight:600;color:var(--text);">${esc(w.team_name||"Unnamed")}</div>
-                <div style="font-size:10px;color:var(--text-muted);font-family:'DM Mono',monospace;">${esc(w.team_id)}</div>
-              </div>
-            </div>`).join("")
-          : `<div style="color:var(--text-muted);font-size:13px;">No workspaces connected yet.</div>`
-      );
-    }
-
-    // ── disconnect ────────────────────────────────────────────────────────────
-    else if (obj.ok && obj.team_id && obj.revoked !== undefined){
-      html += `<div style="padding:12px;border-radius:8px;background:rgba(109,191,160,0.08);border:1px solid rgba(109,191,160,0.3);">
-        <div style="font-size:13px;font-weight:600;color:var(--success);">✓ Workspace disconnected</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:'DM Mono',monospace;">${esc(obj.team_id)}</div>
-      </div>`;
-    }
-
-    // ── chat answer (full AI response in output panel) ────────────────────────
-    else if (obj.ok && obj.question){
-      // ── query info header ────────────────────────────────────────────────────
-      html += `<div style="padding:10px 12px;border-radius:8px;background:rgba(155,127,232,0.06);border:1px solid rgba(155,127,232,0.15);margin-bottom:14px;">
-        <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Query Info</div>
-        <div style="font-size:12px;color:var(--text-soft);margin-bottom:4px;">${esc(obj.question)}</div>
-        <div style="display:flex;gap:12px;margin-top:8px;font-size:11px;color:var(--text-muted);">
-          <span>📨 ${obj.retrieved || 0} messages retrieved</span>
-          ${obj.channels_searched > 1 ? `<span>🌐 ${obj.channels_searched} channels</span>` : ""}
-        </div>
-      </div>`;
-
-      if (obj.answer) {
-        var raw = obj.answer;
-
-        function parseSection(text, label) {
-          var lines = text.split("\n");
-          var collecting = false;
-          var result = [];
-          var allLabels = ["answer", "key points", "action items", "citations"];
-          for (var i = 0; i < lines.length; i++) {
-            var line = lines[i];
-            var lineLower = line.toLowerCase();
-            var startsWithLabel = allLabels.some(function(l){ return lineLower.startsWith(l + ":"); });
-            if (lineLower.startsWith(label.toLowerCase() + ":")) {
-              collecting = true;
-              var rest = line.substring(line.indexOf(":") + 1).trim();
-              if (rest) result.push(rest);
-            } else if (collecting && startsWithLabel) {
-              break;
-            } else if (collecting) {
-              result.push(line);
-            }
-          }
-          return result.join("\n").trim();
-        }
-
-        var answerText  = parseSection(raw, "Answer") || raw;
-        var keyPoints   = parseSection(raw, "Key points");
-        var actionItems = parseSection(raw, "Action items");
-        var isWarning   = raw.startsWith("⚠️");
-
-        // Badges row
-        if (obj.resolved_username) {
-          html += `<div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#0d9488;padding:4px 10px;background:rgba(13,148,136,0.07);border-radius:4px;border:1px solid rgba(13,148,136,0.2);margin-bottom:8px;">
-            👤 Filtering messages from <strong>@${esc(obj.resolved_username)}</strong></div>`;
-        }
-        if (obj.channels_searched > 1) {
-          html += `<div style="font-size:11px;color:var(--accent);padding:4px 8px;background:rgba(155,127,232,0.08);border-radius:4px;border:1px solid rgba(155,127,232,0.2);margin-bottom:8px;">
-            🌐 Answer synthesized from <strong>${obj.channels_searched} channels</strong> · ${obj.retrieved || 0} messages reviewed</div>`;
-        }
-
-        // Main answer block
-        html += `<div style="padding:12px 14px;border-radius:8px;background:${isWarning ? 'var(--danger-bg)' : 'var(--surface2)'};border:1px solid ${isWarning ? 'rgba(224,122,138,0.3)' : 'var(--border)'};margin-bottom:12px;">
-          <div style="font-size:11px;font-weight:600;color:${isWarning ? 'var(--danger)' : 'var(--text-muted)'};text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Answer</div>
-          <div style="font-size:13px;color:var(--text);line-height:1.7;">${esc(answerText).split("\n").join("<br>")}</div>
-        </div>`;
-
-        // Key points
-        if (keyPoints && keyPoints.toLowerCase() !== "none" && keyPoints.trim()) {
-          var bullets = keyPoints.split("\n")
-            .map(function(b){ return b.replace(/^[\*\-]\s*/, "").trim(); })
-            .filter(function(b){ return b.length > 0; });
-          if (bullets.length) {
-            html += `<div style="padding:12px 14px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);margin-bottom:12px;">
-              <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Key Points</div>`;
-            bullets.forEach(function(b){
-              html += `<div style="display:flex;gap:8px;margin-bottom:6px;font-size:13px;color:var(--text-soft);">
-                <span style="color:var(--accent);flex-shrink:0;margin-top:1px;">·</span>
-                <span>${esc(b)}</span>
-              </div>`;
-            });
-            html += `</div>`;
-          }
-        }
-
-        // Action items
-        if (actionItems && actionItems.toLowerCase() !== "none" && actionItems.trim()) {
-          html += `<div style="padding:12px 14px;border-radius:8px;background:rgba(155,127,232,0.07);border:1px solid rgba(155,127,232,0.18);margin-bottom:12px;">
-            <div style="font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Action Items</div>
-            <div style="font-size:13px;color:var(--text-soft);line-height:1.65;">${esc(actionItems).split("\n").join("<br>")}</div>
-          </div>`;
-        }
-
-        // Citations / sources
-        if (obj.citations && obj.citations.length > 0) {
-          function stripSlackText(t){
-            return (t||"").replace(/<https?:\/\/[^|>]+\|([^>]+)>/g,"$1")
-              .replace(/<https?:\/\/[^>]+>/g,"[link]")
-              .replace(/[*_]/g,"");
-          }
-          html += `<div style="border-top:1px solid var(--border);padding-top:10px;">
-            <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Sources (${obj.citations.length})</div>`;
-          obj.citations.forEach(function(c, i){
-            var snippet = esc(stripSlackText(c.snippet || c.text || ""));
-            if (snippet.length > 220) snippet = snippet.slice(0, 220) + "…";
-            html += `<div style="border-left:2px solid var(--accent);padding:7px 10px;margin-bottom:8px;border-radius:0 6px 6px 0;background:var(--surface2);">
-              <div style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:4px;">
-                [${i+1}] ${esc(c.timestamp_human||"")} · ${esc(c.username||c.user_id||"unknown")}${c.channel_id ? ' · <span style="color:var(--accent);">#'+esc(c.channel_id)+'</span>' : ''}
-              </div>
-              <div style="font-size:12px;color:var(--text-soft);line-height:1.5;">${snippet}</div>
-            </div>`;
-          });
-          html += `</div>`;
-        }
-      }
-    }
-
-    // ── generic ok ───────────────────────────────────────────────────────────
-    else if (obj.ok){
-      html += `<div style="padding:10px 12px;border-radius:8px;background:rgba(109,191,160,0.08);border:1px solid rgba(109,191,160,0.3);font-size:13px;color:var(--success);">✓ Done</div>`;
-    }
-
-    el.innerHTML = html || `<div style="color:var(--text-muted);font-size:12px;">No output.</div>`;
-  }
-  async function safeJson(r){ const text = await r.text(); try { return JSON.parse(text); } catch { return {ok:false, raw:text, status:r.status}; } }
-
-  async function fetchJson(url, options){
-    const res = await fetch(bust(url), Object.assign({ cache:"no-store", credentials:"include" }, options || {}));
-    return safeJson(res);
-  }
-
-  async function refreshNow(){ await loadWorkspaces(); }
-
-  async function loadWorkspaces(preferredTeamId=""){
-    try{
-      setStatus("Loading workspaces…");
-      const data = await fetchJson(getApiBase() + "/workspaces");
-      // Always show the workspace list in the output panel — never overwrite it automatically
-      show(data);
-      const sel = document.getElementById("workspaceSelect");
-      const channelSel = document.getElementById("channelSelect");
-      sel.innerHTML = "";
-      // Reset channels whenever workspaces are reloaded
-      channelSel.innerHTML = '<option value="">— Select workspace, then Load Channels —</option>';
-      if (!data.ok) {
-        sel.innerHTML = '<option value="">— failed to load workspaces —</option>';
-        setStatus("Workspaces load failed", "err");
-        return;
-      }
-      const list = data.workspaces || [];
-      if (!list.length) {
-        sel.innerHTML = '<option value="">— none connected yet —</option>';
-        setStatus("No workspaces connected", "warn");
-        return;
-      }
-      let chosen = false;
-      list.forEach((w, idx) => {
-        const opt = document.createElement("option");
-        opt.value = w.team_id;
-        opt.textContent = (w.team_name ? w.team_name : w.team_id) + (w.team_name ? "  (" + w.team_id + ")" : "");
-        if ((preferredTeamId && w.team_id === preferredTeamId) || (!preferredTeamId && idx === 0)) { opt.selected = true; chosen = true; }
-        sel.appendChild(opt);
-      });
-      if (!chosen && sel.options.length > 0) sel.selectedIndex = 0;
-      setStatus(list.length + " workspace" + (list.length > 1 ? "s" : "") + " loaded — click Load Channels", "ok");
-    }catch(e){ show({ok:false, error:String(e)}); setStatus("Workspaces load failed", "err"); }
-  }
-
-  function connectSlack(){
-    setStatus("Opening Slack OAuth…");
-    oauthPopup = window.open(getApiBase() + "/install", "slack_oauth_popup", "width=700,height=800,menubar=no,toolbar=no,location=yes,resizable=yes,scrollbars=yes,status=no");
-    if (!oauthPopup) setStatus("Popup blocked", "err");
-  }
-
-  window.addEventListener("message", async (event) => {
-    const data = event.data || {};
-    if (data.type === "slack_oauth_success") {
-      setStatus("Workspace connected — refreshing…", "ok");
-      // Small delay to let the OAuth callback finish writing to DynamoDB
-      await new Promise(res => setTimeout(res, 600));
-      await loadWorkspaces(data.team_id || "");
-    } else if (data.type === "slack_oauth_error") {
-      show({ok:false, oauth_error:data.error});
-      setStatus("Slack connect failed", "err");
-    }
-  });
-
-  async function checkToken(){
-    const team_id = document.getElementById("workspaceSelect").value;
-    if(!team_id){ setStatus("Select a workspace first", "warn"); return; }
-    setStatus("Checking token…");
-    const data = await fetchJson(getApiBase() + "/token/status?team_id=" + encodeURIComponent(team_id));
-    show(data);
-    setStatus(data.ok && data.has_token ? "Token OK" : "Token missing", data.ok && data.has_token ? "ok" : "warn");
-  }
-
-  async function loadChannels(){
-    const team_id = document.getElementById("workspaceSelect").value;
-    const sel = document.getElementById("channelSelect");
-    if(!team_id){ sel.innerHTML = '<option value="">— Load channels first —</option>'; return; }
-    setStatus("Loading channels…");
-    const data = await fetchJson(getApiBase() + "/channels?team_id=" + encodeURIComponent(team_id));
-    show(data);
-    sel.innerHTML = "";
-    if (!data.ok) { sel.innerHTML = '<option value="">— failed to load channels —</option>'; setStatus("Channels load failed", "err"); return; }
-    const channels = data.channels || [];
-    if (!channels.length) { sel.innerHTML = '<option value="">— no channels returned —</option>'; setStatus("No channels", "warn"); return; }
-    channels.forEach(c => { const opt=document.createElement("option"); opt.value=c.id; opt.textContent="#" + c.name; sel.appendChild(opt); });
-    setStatus("Channels loaded", "ok");
-    // Refresh multi-channel pickers if they're open
-    if (searchMultiMode) populateMultiChannelList("multiSearchChannelList");
-    if (chatMultiMode)   populateMultiChannelList("multiChatChannelList");
-  }
-
-  async function backfillOneChannel(team_id, channel_id){
-    let cursor = "", totalStored = 0;
-    while (true){
-      const url = getApiBase() + "/backfill-channel?team_id=" + encodeURIComponent(team_id) + "&channel_id=" + encodeURIComponent(channel_id) + "&limit=200" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : "");
-      const data = await fetchJson(url, { method:"POST" });
-      if (!data.ok) return { ok:false, error:data };
-      totalStored += (data.stored_new || 0);
-      if (!data.has_more) break;
-      cursor = data.next_cursor || "";
-      await new Promise(res => setTimeout(res, 350));
-    }
-    return { ok:true, stored: totalStored };
-  }
-
-  async function joinSelectedAndBackfill(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      const channel_id = document.getElementById("channelSelect").value;
-      if(!team_id || !channel_id){ setStatus("Select workspace + channel first", "warn"); return; }
-      setStatus("Joining channel…");
-      const j = await fetchJson(getApiBase() + "/join-channel?team_id=" + encodeURIComponent(team_id) + "&channel_id=" + encodeURIComponent(channel_id), { method:"POST" });
-      if(!j.ok){ show(j); setStatus("Join failed", "err"); return; }
-      setStatus("Backfilling…");
-      const bf = await backfillOneChannel(team_id, channel_id);
-      show({ join:j, backfill:bf });
-      setStatus(bf.ok ? ("Done — " + bf.stored + " stored") : "Backfill failed", bf.ok ? "ok" : "err");
-    }catch(e){ show({ok:false, error:String(e)}); setStatus("Failed", "err"); }
-  }
-
-  async function joinAllAndBackfill(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      if(!team_id){ setStatus("Select a workspace first", "warn"); return; }
-      setStatus("Joining all public channels…");
-      const j = await fetchJson(getApiBase() + "/join-all-public?team_id=" + encodeURIComponent(team_id), { method:"POST" });
-      if(!j.ok){ show(j); setStatus("Join-all failed", "err"); return; }
-      await loadChannels();
-      const channelIds = Array.from(document.getElementById("channelSelect").options).map(o => o.value).filter(Boolean);
-      if(!channelIds.length){ show(j); setStatus("No channels loaded", "warn"); return; }
-      let total = 0, results = [];
-      for (let i = 0; i < channelIds.length; i++){
-        setStatus(`Backfilling ${i+1}/${channelIds.length}…`);
-        const bf = await backfillOneChannel(team_id, channelIds[i]);
-        results.push({ channel: channelIds[i], ...bf });
-        if (bf.ok) total += bf.stored;
-        await new Promise(res => setTimeout(res, 400));
-      }
-      show({ join_all:j, backfill_all:{ total_stored: total, results } });
-      setStatus("Done — " + total + " total stored", "ok");
-    }catch(e){ show({ok:false, error:String(e)}); setStatus("Failed", "err"); }
-  }
-
-  async function joinAllPublicOnly(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      if(!team_id){ setStatus("Select a workspace first", "warn"); return; }
-      setStatus("Joining all public channels…");
-      const j = await fetchJson(getApiBase() + "/join-all-public?team_id=" + encodeURIComponent(team_id), { method:"POST" });
-      show(j);
-      setStatus(j.ok ? ("Joined " + (j.joined_count||0) + " public channels") : "Join failed", j.ok ? "ok" : "err");
-      if(j.ok) await loadChannels();
-    }catch(e){ show({ok:false, error:String(e)}); setStatus("Failed", "err"); }
-  }
-
-  async function backfillAllPublic(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      if(!team_id){ setStatus("Select a workspace first", "warn"); return; }
-      setStatus("Backfilling all public channels…");
-      const data = await fetchJson(getApiBase() + "/backfill-all-public?team_id=" + encodeURIComponent(team_id), { method:"POST" });
-      show({ backfill_all: data });
-      setStatus(data.ok ? ("Done — " + (data.total_stored||0) + " stored") : "Backfill failed", data.ok ? "ok" : "err");
-    }catch(e){ show({ok:false, error:String(e)}); setStatus("Failed", "err"); }
-  }
-
-  async function backfillAllPrivate(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      if(!team_id){ setStatus("Select a workspace first", "warn"); return; }
-      setStatus("Backfilling all private channels…");
-      const data = await fetchJson(getApiBase() + "/backfill-all-private?team_id=" + encodeURIComponent(team_id), { method:"POST" });
-      show({ backfill_all: data });
-      setStatus(data.ok ? ("Done — " + (data.total_stored||0) + " stored") : "Backfill failed", data.ok ? "ok" : "err");
-    }catch(e){ show({ok:false, error:String(e)}); setStatus("Failed", "err"); }
-  }
-
-  async function loadMessagesFromDB(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      const channel_id = document.getElementById("channelSelect").value;
-      if(!team_id || !channel_id){ setStatus("Select workspace + channel first", "warn"); return; }
-      setStatus("Loading from DB…");
-      const data = await fetchJson(getApiBase() + "/db-messages?team_id=" + encodeURIComponent(team_id) + "&channel_id=" + encodeURIComponent(channel_id) + "&limit=50");
-      show(data);
-      setStatus(data.ok ? "Loaded from DB" : "DB load failed", data.ok ? "ok" : "err");
-    }catch(e){ show({ok:false, error:String(e)}); setStatus("DB load failed", "err"); }
-  }
-
-  async function disconnectWorkspace(){
-    try{
-      const team_id = document.getElementById("workspaceSelect").value;
-      const workspaceSel = document.getElementById("workspaceSelect");
-      const channelSel = document.getElementById("channelSelect");
-      if(!team_id){ setStatus("Select a workspace first", "warn"); return; }
-      if(!confirm("Disconnect this workspace? This will revoke the token and delete the secret.")) return;
-      setStatus("Disconnecting…");
-      const data = await fetchJson(getApiBase() + "/workspaces/" + encodeURIComponent(team_id), { method:"DELETE" });
-      show(data);
-      if (!data.ok) { setStatus("Disconnect failed", "err"); return; }
-      workspaceSel.innerHTML = '<option value="">— none connected yet —</option>';
-      channelSel.innerHTML = '<option value="">— Load channels first —</option>';
-      setStatus("Disconnected", "ok");
-      await loadWorkspaces();
-    }catch(e){ show({ok:false, error:String(e)}); setStatus("Disconnect failed", "err"); }
-  }
-
-  // ── Mode state ────────────────────────────────────────────────────────────
-  let searchMultiMode = false;
-  let chatMultiMode   = false;
-
-  function toggleSearchMode() {
-    searchMultiMode = !searchMultiMode;
-    const btn = document.getElementById("searchModeToggle");
-    const picker = document.getElementById("multiSearchChannelPicker");
-    const info = document.getElementById("searchSingleChannelInfo");
-    if (searchMultiMode) {
-      btn.textContent = "✕ Single Channel";
-      btn.style.background = "rgba(155,127,232,0.12)";
-      btn.style.borderColor = "rgba(155,127,232,0.4)";
-      btn.style.color = "var(--accent)";
-      picker.style.display = "block";
-      info.style.display = "none";
-      populateMultiChannelList("multiSearchChannelList");
-    } else {
-      btn.textContent = "+ Multi-Channel";
-      btn.style.background = "";
-      btn.style.borderColor = "";
-      btn.style.color = "";
-      picker.style.display = "none";
-      info.style.display = "none";
-    }
-  }
-
-  function toggleChatMode() {
-    chatMultiMode = !chatMultiMode;
-    const btn = document.getElementById("chatModeToggle");
-    const picker = document.getElementById("multiChatChannelPicker");
-    const info = document.getElementById("chatSingleChannelInfo");
-    if (chatMultiMode) {
-      btn.textContent = "✕ Single Channel";
-      btn.style.background = "rgba(155,127,232,0.12)";
-      btn.style.borderColor = "rgba(155,127,232,0.4)";
-      btn.style.color = "var(--accent)";
-      picker.style.display = "block";
-      info.style.display = "none";
-      populateMultiChannelList("multiChatChannelList");
-    } else {
-      btn.textContent = "+ Multi-Channel";
-      btn.style.background = "";
-      btn.style.borderColor = "";
-      btn.style.color = "";
-      picker.style.display = "none";
-      info.style.display = "none";
-    }
-  }
-
-  // Track selections per container independently
-  const _multiSelections = {};
-
-  function populateMultiChannelList(containerId) {
-    const container = document.getElementById(containerId);
-    const channelSel = document.getElementById("channelSelect");
-    const opts = Array.from(channelSel.options).filter(o => o.value);
-    if (!opts.length) {
-      container.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">Load channels first (Step 02)</span>';
-      return;
-    }
-    // First time: default all checked. After that: restore user's choices.
-    if (!_multiSelections[containerId]) {
-      _multiSelections[containerId] = new Set(opts.map(o => o.value));
-    }
-    const sel = _multiSelections[containerId];
-    container.innerHTML = "";
-    opts.forEach(o => {
-      const uid = "chk_" + containerId + "_" + o.value.replace(/[^a-zA-Z0-9]/g,"_");
-      const cb = document.createElement("input");
-      cb.type  = "checkbox";
-      cb.id    = uid;
-      cb.value = o.value;
-      cb.checked = sel.has(o.value);
-      cb.addEventListener("change", () => {
-        if (cb.checked) sel.add(o.value); else sel.delete(o.value);
-      });
-      const lbl = document.createElement("label");
-      lbl.htmlFor = uid;
-      lbl.style.cssText = "display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:pointer;width:100%;box-sizing:border-box;text-transform:none;letter-spacing:0;font-size:13px;color:var(--text-soft);font-weight:400;margin:0;";
-      lbl.onmouseover = () => lbl.style.background = "rgba(155,127,232,0.08)";
-      lbl.onmouseout  = () => lbl.style.background = "transparent";
-      lbl.appendChild(cb);
-      lbl.appendChild(document.createTextNode(o.textContent));
-      container.appendChild(lbl);
-    });
-  }
-
-  function getCheckedChannels(containerId) {
-    return Array.from(document.getElementById(containerId).querySelectorAll('input[type=checkbox]:checked')).map(cb => cb.value);
-  }
-
-  function selectAllSearchChannels() {
-    document.getElementById("multiSearchChannelList").querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = true; if(_multiSelections["multiSearchChannelList"]) _multiSelections["multiSearchChannelList"].add(cb.value); });
-  }
-  function clearAllSearchChannels() {
-    document.getElementById("multiSearchChannelList").querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = false; if(_multiSelections["multiSearchChannelList"]) _multiSelections["multiSearchChannelList"].delete(cb.value); });
-  }
-  function selectAllChatChannels() {
-    document.getElementById("multiChatChannelList").querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = true; if(_multiSelections["multiChatChannelList"]) _multiSelections["multiChatChannelList"].add(cb.value); });
-  }
-  function clearAllChatChannels() {
-    document.getElementById("multiChatChannelList").querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = false; if(_multiSelections["multiChatChannelList"]) _multiSelections["multiChatChannelList"].delete(cb.value); });
-  }
-
-  async function searchMessages(){
-    try {
-      const team_id = document.getElementById("workspaceSelect").value;
-      if (!team_id) { setStatus("Select workspace first", "warn"); return; }
-      const q = document.getElementById("keyword").value.trim();
-      const from = document.getElementById("fromDate").value;
-      const to = document.getElementById("toDate").value;
-      const user_id = document.getElementById("searchUserId").value.trim();
-
-      if (searchMultiMode) {
-        const channelIds = getCheckedChannels("multiSearchChannelList");
-        if (!channelIds.length) { setStatus("Select at least one channel", "warn"); return; }
-        let url = getApiBase() + "/search/multi?team_id=" + encodeURIComponent(team_id)
-          + "&channel_ids=" + encodeURIComponent(channelIds.join(","));
-        if (q) url += "&q=" + encodeURIComponent(q);
-        if (from) url += "&from=" + encodeURIComponent(from);
-        if (to) url += "&to=" + encodeURIComponent(to);
-        if (user_id) url += "&username=" + encodeURIComponent(user_id);
-        setStatus("Searching " + channelIds.length + " channels…");
-        const data = await fetchJson(url);
-        show(data);
-        const n = data.count || 0;
-        const chCount = data.channels_searched || channelIds.length;
-        setStatus(data.ok ? (n > 0 ? `Found ${n} result${n===1?"":"s"} across ${chCount} channels` : "No results found") : "Search failed", data.ok ? (n > 0 ? "ok" : "warn") : "err");
-      } else {
-        const channel_id = document.getElementById("channelSelect").value;
-        if (!channel_id) { setStatus("Select workspace + channel first", "warn"); return; }
-        let url = getApiBase() + "/search?team_id=" + encodeURIComponent(team_id) + "&channel_id=" + encodeURIComponent(channel_id);
-        if (q) url += "&q=" + encodeURIComponent(q);
-        if (from) url += "&from=" + encodeURIComponent(from);
-        if (to) url += "&to=" + encodeURIComponent(to);
-        if (user_id) url += "&username=" + encodeURIComponent(user_id);
-        setStatus("Searching…");
-        const data = await fetchJson(url);
-        show(data);
-        const n = data.count || 0;
-        setStatus(data.ok ? (n > 0 ? `Found ${n} message${n===1?"":"s"}` : "No results found") : "Search failed", data.ok ? (n > 0 ? "ok" : "warn") : "err");
-      }
-    } catch(e) {
-      show({ ok:false, error: String(e) });
-      setStatus("Search error", "err");
-    }
-  }
-  // ── Ask AI ───────────────────────────────────────────────────────────────
-  async function askChat() {
-    try {
-      const team_id    = document.getElementById("workspaceSelect").value;
-      const question   = document.getElementById("chatQuestion").value.trim();
-      const fromDate   = document.getElementById("chatFromDate").value  || null;
-      const toDate     = document.getElementById("chatToDate").value    || null;
-      if (!team_id) { setStatus("Select a workspace first", "warn"); return; }
-      if (!question)               { setStatus("Enter a question first", "warn"); return; }
-      if (question.length > 500)   { setStatus("Question too long (max 500 chars)", "warn"); return; }
-      if (fromDate && toDate && fromDate > toDate) { setStatus("'From' date must be before 'To' date", "warn"); return; }
-
-      const btn = document.getElementById("askBtn");
-      btn.disabled    = true;
-      btn.textContent = "Asking…";
-      document.getElementById("chatAnswer").style.display = "none";
-
-      let requestBody;
-      let endpoint;
-
-      if (chatMultiMode) {
-        const channelIds = getCheckedChannels("multiChatChannelList");
-        if (!channelIds.length) { setStatus("Select at least one channel", "warn"); btn.disabled = false; btn.textContent = "Ask"; return; }
-        endpoint = getApiBase() + "/chat/multi";
-        const payload = { team_id, channel_ids: channelIds, question };
-        if (fromDate) payload.from_date = fromDate;
-        if (toDate)   payload.to_date   = toDate;
-        requestBody = JSON.stringify(payload);
-        const dateRange = fromDate ? ` · ${fromDate}${toDate ? " → " + toDate : "+"}` : "";
-        setStatus("Thinking across " + channelIds.length + " channels" + dateRange + "…");
-      } else {
-        const channel_id = document.getElementById("channelSelect").value;
-        if (!channel_id) { setStatus("Select workspace + channel first", "warn"); btn.disabled = false; btn.textContent = "Ask"; return; }
-        endpoint = getApiBase() + "/chat";
-        const payload = { team_id, channel_id, question };
-        if (fromDate) payload.from_date = fromDate;
-        if (toDate)   payload.to_date   = toDate;
-        requestBody = JSON.stringify(payload);
-        const dateRange = fromDate ? ` · ${fromDate}${toDate ? " → " + toDate : "+"}` : "";
-        setStatus("Thinking" + dateRange + "…");
-      }
-
-      const r = await fetch(endpoint, {
-        method:      "POST",
-        credentials: "include",
-        headers:     { "Content-Type": "application/json" },
-        body:        requestBody,
-      });
-      const data = await safeJson(r);
-      show(data);
-
-      if (r.status === 403) { setStatus("Access denied", "err"); return; }
-
-      if (data.ok && data.answer) {
-        var raw = data.answer || "";
-
-        function parseSection(text, label) {
-          var lines = text.split("\n");
-          var collecting = false;
-          var result = [];
-          var allLabels = ["answer", "key points", "action items", "citations"];
-          for (var i = 0; i < lines.length; i++) {
-            var line = lines[i];
-            var lineLower = line.toLowerCase();
-            var startsWithLabel = allLabels.some(function (l) { return lineLower.startsWith(l + ":"); });
-            if (lineLower.startsWith(label.toLowerCase() + ":")) {
-              collecting = true;
-              var rest = line.substring(line.indexOf(":") + 1).trim();
-              if (rest) result.push(rest);
-            } else if (collecting && startsWithLabel) {
-              break;
-            } else if (collecting) {
-              result.push(line);
-            }
-          }
-          return result.join("\n").trim();
-        }
-
-        function esc(s) {
-          return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        }
-
-        var answerText  = parseSection(raw, "Answer") || raw;
-        var keyPoints   = parseSection(raw, "Key points");
-        var actionItems = parseSection(raw, "Action items");
-
-        var html = '<div style="font-size:13px;color:var(--text);line-height:1.7;">'
-          + esc(answerText).split("\n").join("<br>") + "</div>";
-
-        if (keyPoints && keyPoints.toLowerCase() !== "none" && keyPoints.trim() !== "") {
-          var bullets = keyPoints.split("\n")
-            .map(function (b) { return b.replace(/^[\*\-]\s*/, "").trim(); })
-            .filter(function (b) { return b.length > 0; });
-          html += '<div style="margin-top:12px;">'
-            + '<div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Key Points</div>';
-          for (var i = 0; i < bullets.length; i++) {
-            html += '<div style="display:flex;gap:6px;margin-bottom:4px;font-size:13px;color:var(--text-soft);">'
-              + '<span style="color:var(--accent);flex-shrink:0;">&#xB7;</span>'
-              + "<span>" + esc(bullets[i]) + "</span></div>";
-          }
-          html += "</div>";
-        }
-
-        if (actionItems && actionItems.toLowerCase() !== "none" && actionItems.trim() !== "") {
-          html += '<div style="margin-top:12px;padding:8px 12px;border-radius:6px;'
-            + "background:rgba(155,127,232,0.07);border:1px solid rgba(155,127,232,0.15);\">"
-            + '<div style="font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;'
-            + 'letter-spacing:.04em;margin-bottom:4px;">Action Items</div>'
-            + '<div style="font-size:13px;color:var(--text-soft);">'
-            + esc(actionItems).split("\n").join("<br>") + "</div></div>";
-        }
-
-        // Multi-channel badge
-        if (data.channels_searched && data.channels_searched > 1) {
-          html = '<div style="font-size:11px;color:var(--accent);margin-bottom:8px;padding:4px 8px;background:rgba(155,127,232,0.08);border-radius:4px;border:1px solid rgba(155,127,232,0.2);">🌐 Answer synthesized from <strong>' + data.channels_searched + ' channels</strong> · ' + (data.retrieved_count || 0) + ' messages reviewed</div>' + html;
-        }
-
-        // Resolved username badge — shown when a name was auto-detected from the question
-        if (data.resolved_username) {
-          html = '<div style="font-size:11px;color:var(--teal,#0d9488);margin-bottom:8px;padding:4px 10px;background:rgba(13,148,136,0.07);border-radius:4px;border:1px solid rgba(13,148,136,0.2);display:inline-flex;align-items:center;gap:5px;">'
-            + '👤 Filtering messages from <strong>@' + data.resolved_username + '</strong></div><br>' + html;
-        }
-
-        // Date range badge
-        const chatFrom = document.getElementById("chatFromDate").value;
-        const chatTo   = document.getElementById("chatToDate").value;
-        if (chatFrom || chatTo) {
-          const rangeLabel = chatFrom && chatTo ? chatFrom + " → " + chatTo
-                           : chatFrom ? "From " + chatFrom
-                           : "Until " + chatTo;
-          html = '<div style="font-size:11px;color:#2563eb;margin-bottom:8px;padding:4px 10px;background:rgba(37,99,235,0.07);border-radius:4px;border:1px solid rgba(37,99,235,0.2);display:inline-flex;align-items:center;gap:5px;">'
-            + '📅 Date range: <strong>' + rangeLabel + '</strong></div><br>' + html;
-        }
-
-        document.getElementById("chatAnswerText").innerHTML = html;
-
-        const citBox = document.getElementById("chatCitations");
-        if (data.citations && data.citations.length > 0) {
-          function stripSlack(t) {
-            return (t || "").replace(/<https?:\/\/[^|>]+\|([^>]+)>/g, "$1")
-              .replace(/<https?:\/\/[^>]+>/g, "[link]")
-              .replace(/[*_]/g, "");
-          }
-          citBox.innerHTML = `
-            <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
-              <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">
-                Sources (${data.citations.length})
-              </div>
-              ${data.citations.map((c, i) => `
-                <div style="border-left:2px solid var(--accent);padding:6px 10px;margin-bottom:8px;border-radius:0 6px 6px 0;background:var(--surface2);">
-                  <div style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:4px;">
-                    [${i + 1}] ${c.timestamp_human || ""} · ${c.username || c.user_id || "unknown"}${c.channel_id ? ' · <span style="color:var(--accent);">#' + c.channel_id + '</span>' : ''}
-                  </div>
-                  <div style="font-size:12px;color:var(--text-soft);line-height:1.5;">
-                    ${stripSlack(c.snippet || c.text || "").slice(0, 200)}${(c.snippet || "").length > 200 ? "…" : ""}
-                  </div>
-                </div>`).join("")}
-            </div>`;
-        } else {
-          citBox.innerHTML = "";
-        }
-
-        document.getElementById("chatAnswer").style.display = "block";
-        const chInfo = data.channels_searched && data.channels_searched > 1 ? ` (${data.channels_searched} channels)` : "";
-        setStatus("Answer ready" + chInfo, "ok");
-        show({ ok: true, question: data.question, answer: data.answer, citations: data.citations, retrieved: data.retrieved_count, channels_searched: data.channels_searched, resolved_username: data.resolved_username });
-      } else {
-        setStatus("Chat failed", "err");
-      }
-    } catch (e) {
-      show({ ok: false, error: String(e) });
-      setStatus("Chat error", "err");
-    } finally {
-      const btn = document.getElementById("askBtn");
-      btn.disabled    = false;
-      btn.textContent = "Ask";
-    }
-  }
-// ── Keyboard shortcut: Ctrl+Enter in textarea ─────────────────────────
-  document.addEventListener("DOMContentLoaded", () => {
-    const ta = document.getElementById("chatQuestion");
-    if (ta) {
-      ta.addEventListener("keydown", e => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") askChat();
-      });
-    }
-  });
-
-  function clearSearch(){
-    document.getElementById("keyword").value = "";
-    document.getElementById("fromDate").value = "";
-    document.getElementById("toDate").value = "";
-    document.getElementById("searchUserId").value = "";
-    document.getElementById("chatFromDate").value = "";
-    document.getElementById("chatToDate").value = "";
-    show({});
-    setStatus("Cleared");
-  }
-
-  // ── Session Init ─────────────────────────────────────────────────────────
-  async function initSession() {
-    try {
-      const r = await fetchJson(getApiBase() + "/session");
-      if (r.ok && r.session_id) {
-        document.getElementById("sessionId").textContent = r.session_id.slice(0, 8) + "…";
-        document.getElementById("sessionBadge").style.display = "flex";
-        document.getElementById("logoutBtn").style.display    = "inline-block";
-      }
-    } catch(e) { /* non-fatal */ }
-    await loadWorkspaces();
-  }
-
-  async function logout() {
-    if (!confirm("Sign out? Your session will be cleared.")) return;
-    try {
-      await fetch(getApiBase() + "/logout", { method: "POST", credentials: "include" });
-    } catch(e) {}
-    // Clear UI
-    document.getElementById("workspaceSelect").innerHTML = '<option value="">— none connected yet —</option>';
-    document.getElementById("channelSelect").innerHTML   = '<option value="">— Load channels first —</option>';
-    document.getElementById("sessionBadge").style.display = "none";
-    document.getElementById("logoutBtn").style.display    = "none";
-    show({});
-    setStatus("Signed out", "warn");
-  }
-
-  initSession();
-</script>
+  <script src="app.js"></script>
 </body>
+
 </html>
