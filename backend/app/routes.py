@@ -322,22 +322,22 @@ def backfill_channel(team_id: str, channel_id: str, request: Request, limit: int
     msgs = data.get("messages", []) or []
     pk   = f"{team_id}#{channel_id}"
     stored = 0
-    for m in msgs:
-        ts_msg = str(m.get("ts"))
-        if not ts_msg:
-            continue
-        uid      = m.get("user")
-        username = resolve_username_for_message(team_id, uid, sec["bot_token"]) if uid else ""
-        item = {
-            "pk": pk, "sk": ts_msg,
-            "team_id": team_id, "channel_id": channel_id, "ts": ts_msg,
-            "user_id": uid, "username": username, "text": m.get("text", ""),
-            "thread_ts": m.get("thread_ts"), "reply_count": m.get("reply_count", 0),
-            "subtype": m.get("subtype"), "type": m.get("type"),
-            "fetched_at": datetime.utcnow().isoformat() + "Z",
-        }
-        from app.db import get_conn
-        with get_conn() as conn:
+    from app.db import get_conn
+    with get_conn() as conn:
+        for m in msgs:
+            ts_msg = str(m.get("ts"))
+            if not ts_msg:
+                continue
+            uid      = m.get("user")
+            username = resolve_username_for_message(team_id, uid, sec["bot_token"]) if uid else ""
+            item = {
+                "pk": pk, "sk": ts_msg,
+                "team_id": team_id, "channel_id": channel_id, "ts": ts_msg,
+                "user_id": uid, "username": username, "text": m.get("text", ""),
+                "thread_ts": m.get("thread_ts"), "reply_count": m.get("reply_count", 0),
+                "subtype": m.get("subtype"), "type": m.get("type"),
+                "fetched_at": datetime.utcnow().isoformat() + "Z",
+            }
             try:
                 cur = conn.execute("""
                     INSERT INTO messages
