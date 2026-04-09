@@ -33,7 +33,7 @@ SESSION_TTL_HOURS    = 72
 IS_PROD              = os.getenv("ENV", "dev").strip().lower() == "prod"
 
 # ── FRONTEND ──────────────────────────────────────────────────────────────────
-_frontend_default = Path(__file__).with_name("index.html")
+_frontend_default = Path(__file__).parent.parent / "frontend" / "index.html"
 FRONTEND_PATH     = Path(os.getenv("FRONTEND_PATH", str(_frontend_default)))
 
 # ── GROQ TIMEOUTS & TOKEN LIMITS ─────────────────────────────────────────────

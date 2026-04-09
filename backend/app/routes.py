@@ -42,6 +42,22 @@ def home():
     return HTMLResponse(f"<h3>UI not found at {FRONTEND_PATH}</h3>", status_code=500)
 
 
+@router.get("/style.css")
+def get_css():
+    css_path = FRONTEND_PATH.parent / "style.css"
+    if css_path.exists():
+        return FileResponse(str(css_path))
+    return HTMLResponse("Not found", status_code=404)
+
+
+@router.get("/app.js")
+def get_js():
+    js_path = FRONTEND_PATH.parent / "app.js"
+    if js_path.exists():
+        return FileResponse(str(js_path))
+    return HTMLResponse("Not found", status_code=404)
+
+
 # ── HEALTH ────────────────────────────────────────────────────────────────────
 
 @router.get("/health")
