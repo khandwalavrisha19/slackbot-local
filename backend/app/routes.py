@@ -25,7 +25,7 @@ from app.session import (
 )
 from app.retrieval import (
     retrieve_messages, retrieve_messages_multi,
-    _build_context,
+    _build_context, _augment_question_with_senders,
 )
 from app.groq_client import _groq_complete
 from app.models import ChatRequest, MultiChatRequest
