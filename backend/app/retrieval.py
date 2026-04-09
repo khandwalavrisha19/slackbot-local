@@ -2,6 +2,8 @@ import re
 from typing import Optional
 
 from app.utils import _date_to_sk, _ts_human, resolve_user_id
+from app.constants import CONTEXT_MAX_CHARS
+from app.logger import logger
 
 
 # ── RECENCY / KEYWORD HELPERS ─────────────────────────────────────────────────
