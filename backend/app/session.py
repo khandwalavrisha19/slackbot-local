@@ -1,4 +1,5 @@
 import uuid
+import json
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -7,77 +8,71 @@ from fastapi import HTTPException, Request, Response
 
 from app.constants import SESSION_COOKIE_NAME, SESSION_TTL_HOURS, IS_PROD
 from app.logger import logger
-from app.utils import sessions_table
-
-
-# ── INTERNAL GUARD ────────────────────────────────────────────────────────────
-
-def _require_sessions_table():
-    if sessions_table is None:
-        raise HTTPException(500, "SESSIONS_TABLE not configured")
+from app.db import get_conn
 
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────
 
 def create_session() -> str:
-    _require_sessions_table()
     session_id = str(uuid.uuid4())
     expires_at = int((datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS)).timestamp())
-    sessions_table.put_item(Item={
-        "session_id": session_id,
-        "team_ids":   [],
-        "created_at": datetime.utcnow().isoformat() + "Z",
-        "expires_at": expires_at,
-    })
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO sessions(session_id, team_ids, created_at, expires_at) VALUES(?, ?, ?, ?)",
+            (session_id, "[]", datetime.utcnow().isoformat() + "Z", expires_at),
+        )
     logger.info(f"[session] created {session_id}")
     return session_id
 
 
 def get_session(session_id: str) -> Optional[dict]:
-    if not session_id or sessions_table is None:
+    if not session_id:
         return None
     try:
-        resp = sessions_table.get_item(Key={"session_id": session_id})
-        item = resp.get("Item")
-        if not item:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        if not row:
             return None
-        if item.get("expires_at", 0) < int(time.time()):
+        if row["expires_at"] < int(time.time()):
             return None
-        return item
+        d = dict(row)
+        d["team_ids"] = json.loads(d["team_ids"] or "[]")
+        return d
     except Exception as e:
         logger.warning(f"[session] get error: {e}")
         return None
 
 
 def bind_team_to_session(session_id: str, team_id: str) -> None:
-    _require_sessions_table()
     sess = get_session(session_id)
     if not sess:
         return
     current = sess.get("team_ids", [])
     if team_id not in current:
         current.append(team_id)
-    sessions_table.update_item(
-        Key={"session_id": session_id},
-        UpdateExpression="SET team_ids = :tids",
-        ExpressionAttributeValues={":tids": current},
-    )
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE sessions SET team_ids = ? WHERE session_id = ?",
+            (json.dumps(current), session_id),
+        )
     logger.info(f"[session] bound team {team_id} to session {session_id}")
 
 
 def unbind_team_from_session(session_id: str, team_id: str) -> None:
-    if not session_id or sessions_table is None:
+    if not session_id:
         return
     sess = get_session(session_id)
     if not sess:
         return
     updated = [t for t in sess.get("team_ids", []) if t != team_id]
     try:
-        sessions_table.update_item(
-            Key={"session_id": session_id},
-            UpdateExpression="SET team_ids = :tids",
-            ExpressionAttributeValues={":tids": updated},
-        )
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE sessions SET team_ids = ? WHERE session_id = ?",
+                (json.dumps(updated), session_id),
+            )
     except Exception as e:
         logger.warning(f"[session] unbind error: {e}")
 

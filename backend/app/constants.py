@@ -13,8 +13,7 @@ MAX_QUESTION_LEN = 1_000       # chars
 MAX_CHANNEL_IDS  = 20          # max channels in multi-chat/search
 
 # ── ENV CONFIG ────────────────────────────────────────────────────────────────
-AWS_REGION           = os.getenv("AWS_REGION", "ap-south-1").strip()
-SECRET_PREFIX        = os.getenv("SECRET_PREFIX", "slackbot").strip()
+
 CLIENT_ID            = os.getenv("SLACK_CLIENT_ID", "").strip()
 CLIENT_SECRET        = os.getenv("SLACK_CLIENT_SECRET", "").strip()
 REDIRECT_URI         = os.getenv("SLACK_REDIRECT_URI", "").strip()
@@ -24,8 +23,7 @@ SLACK_SCOPES         = os.getenv(
 ).strip()
 CORS_ORIGINS         = os.getenv("CORS_ORIGINS", "*")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "").strip()
-DDB_TABLE            = os.getenv("DDB_TABLE", "").strip()
-SESSIONS_TABLE       = os.getenv("SESSIONS_TABLE", "slackbot_sessions").strip()
+DB_PATH = os.getenv("DB_PATH", "slackbot.db").strip()
 GROQ_API_KEY         = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL           = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
 GROQ_URL             = "https://api.groq.com/openai/v1/chat/completions"

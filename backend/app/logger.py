@@ -5,7 +5,7 @@ from datetime import datetime
 
 
 class StructuredLogger(logging.Logger):
-    """Logger that emits JSON lines for easy CloudWatch querying."""
+    """Logger that emits structured JSON lines to stdout."""
 
     def _log_json(self, level: str, msg: str, **extra):
         record = {

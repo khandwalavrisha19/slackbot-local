@@ -5,22 +5,19 @@ from datetime import datetime
 from typing import Optional
 
 import requests
-from botocore.exceptions import ClientError
-from boto3.dynamodb.conditions import Key
 from fastapi import APIRouter, Request, Query, HTTPException, Response
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from urllib.parse import urlencode
 
 from app.constants import (
     CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, SLACK_SCOPES, SLACK_SIGNING_SECRET,
-    FRONTEND_PATH, SESSION_COOKIE_NAME, AWS_REGION, DDB_TABLE, SESSIONS_TABLE,
+    FRONTEND_PATH, SESSION_COOKIE_NAME,
     MAX_BODY_BYTES, MAX_TOKENS_SINGLE, MAX_TOKENS_MULTI, SLACK_API_BASE, SLACK_OAUTH_BASE,
 )
 from app.logger import logger
 from app.utils import (
-    no_cache, secret_name, read_secret, upsert_secret, mask_token,
-    verify_slack_signature, require_ddb, ddb_table, secrets_client,
-    resolve_username_for_message, extract_username_from_question,
+    no_cache, secret_name, read_secret, upsert_secret, delete_secret, mask_token,
+    verify_slack_signature, resolve_username_for_message, extract_username_from_question,
 )
 from app.session import (
     get_or_create_session, require_team_access, create_session,
@@ -52,8 +49,7 @@ def home():
 def health(response: Response):
     no_cache(response)
     return {
-        "status": "ok", "region": AWS_REGION,
-        "ddb_table": DDB_TABLE, "sessions_table": SESSIONS_TABLE,
+        "status": "ok",
         "client_id_present": bool(CLIENT_ID),
     }
 
@@ -173,7 +169,7 @@ def disconnect_workspace(team_id: str, request: Request, response: Response):
         except Exception as e:
             revoke_data = {"ok": False, "error": str(e)}
     try:
-        secrets_client.delete_secret(SecretId=name, ForceDeleteWithoutRecovery=True)
+        delete_secret(team_id)
     except Exception as e:
         return {"ok": False, "detail": str(e), "revoked": revoke_data}
     cookie_val = request.cookies.get(SESSION_COOKIE_NAME)
@@ -295,7 +291,6 @@ def join_all_public(team_id: str, request: Request):
 @router.post("/backfill-channel")
 @router.post("/api/backfill-channel")
 def backfill_channel(team_id: str, channel_id: str, request: Request, limit: int = 200, cursor: str | None = None):
-    require_ddb()
     require_team_access(request, team_id)
     sec = read_secret(secret_name(team_id))
     if not sec or not sec.get("bot_token"):
@@ -325,11 +320,16 @@ def backfill_channel(team_id: str, channel_id: str, request: Request, limit: int
             "subtype": m.get("subtype"), "type": m.get("type"),
             "fetched_at": datetime.utcnow().isoformat() + "Z",
         }
-        try:
-            ddb_table.put_item(Item=item, ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)")
-            stored += 1
-        except ClientError as e:
-            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+        from app.db import get_conn
+        with get_conn() as conn:
+            try:
+                conn.execute("""
+                    INSERT OR IGNORE INTO messages
+                    (pk,sk,team_id,channel_id,ts,user_id,username,text,thread_ts,reply_count,subtype,type,fetched_at)
+                    VALUES(:pk,:sk,:team_id,:channel_id,:ts,:user_id,:username,:text,:thread_ts,:reply_count,:subtype,:type,:fetched_at)
+                """, item)
+                stored += conn.rowcount
+            except Exception as e:
                 raise
     next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
     return {"ok": True, "channel_id": channel_id, "fetched": len(msgs),
@@ -341,7 +341,6 @@ def backfill_channel(team_id: str, channel_id: str, request: Request, limit: int
 @router.post("/backfill-all-public")
 @router.post("/api/backfill-all-public")
 def backfill_all_public(team_id: str, request: Request):
-    require_ddb()
     require_team_access(request, team_id)
     sec = read_secret(secret_name(team_id))
     if not sec or not sec.get("bot_token"):
@@ -386,7 +385,6 @@ def backfill_all_public(team_id: str, request: Request):
 @router.post("/backfill-all-private")
 @router.post("/api/backfill-all-private")
 def backfill_all_private(team_id: str, request: Request):
-    require_ddb()
     require_team_access(request, team_id)
     sec = read_secret(secret_name(team_id))
     if not sec or not sec.get("bot_token"):
@@ -431,7 +429,6 @@ def backfill_all_private(team_id: str, request: Request):
 @router.post("/slack/events")
 @router.post("/api/slack/events")
 async def slack_events(request: Request):
-    require_ddb()
     raw_body = await request.body()
 
     if len(raw_body) > MAX_BODY_BYTES:
@@ -485,17 +482,22 @@ async def slack_events(request: Request):
         "thread_ts": event.get("thread_ts"), "subtype": event.get("subtype"),
         "type": event.get("type"), "fetched_at": datetime.utcnow().isoformat() + "Z",
     }
-    try:
-        ddb_table.put_item(Item=item, ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)")
-        logger.info("Slack event stored", extra={
-            "team_id": team_id, "channel_id": channel_id, "ts": ts_msg, "user_id": uid,
-        })
-    except ClientError as e:
-        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
-            logger.error("DynamoDB put failed for event", extra={
+    from app.db import get_conn
+    with get_conn() as conn:
+        try:
+            conn.execute("""
+                INSERT OR IGNORE INTO messages
+                (pk,sk,team_id,channel_id,ts,user_id,username,text,thread_ts,subtype,type,fetched_at)
+                VALUES(:pk,:sk,:team_id,:channel_id,:ts,:user_id,:username,:text,:thread_ts,:subtype,:type,:fetched_at)
+            """, item)
+        except Exception as e:
+            logger.error("DB insert failed for event", extra={
                 "team_id": team_id, "ts": ts_msg, "error": str(e),
             })
             raise
+    logger.info("Slack event stored", extra={
+        "team_id": team_id, "channel_id": channel_id, "ts": ts_msg, "user_id": uid,
+    })
     return JSONResponse({"ok": True})
 
 
@@ -506,12 +508,15 @@ async def slack_events(request: Request):
 def db_messages(team_id: str, channel_id: str, request: Request, limit: int = 50, response: Response = None):
     if response is not None:
         no_cache(response)
-    require_ddb()
     require_team_access(request, team_id)
+    from app.db import get_conn
     try:
-        resp = ddb_table.query(KeyConditionExpression=Key("pk").eq(f"{team_id}#{channel_id}"),
-                               Limit=limit, ScanIndexForward=False)
-        return {"ok": True, "count": resp.get("Count", 0), "items": resp.get("Items", [])}
+        with get_conn() as conn:
+            items = [dict(r) for r in conn.execute(
+                "SELECT * FROM messages WHERE pk=? ORDER BY sk DESC LIMIT ?",
+                (f"{team_id}#{channel_id}", limit)
+            ).fetchall()]
+        return {"ok": True, "count": len(items), "items": items}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

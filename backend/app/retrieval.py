@@ -1,11 +1,7 @@
 import re
 from typing import Optional
 
-from boto3.dynamodb.conditions import Key, Attr
-
-from app.constants import CONTEXT_MAX_CHARS
-from app.logger import logger
-from app.utils import ddb_table, _date_to_sk, _ts_human, require_ddb, resolve_user_id
+from app.utils import _date_to_sk, _ts_human, resolve_user_id
 
 
 # ── RECENCY / KEYWORD HELPERS ─────────────────────────────────────────────────
@@ -88,54 +84,32 @@ def _format_messages(items: list[dict]) -> list[dict]:
 
 # ── RETRIEVAL ─────────────────────────────────────────────────────────────────
 
-def retrieve_messages(
-    team_id: str, channel_id: str,
-    q: Optional[str] = None, from_date: Optional[str] = None,
-    to_date: Optional[str] = None, user_id: Optional[str] = None,
-    limit: int = 200, top_k: int = 10,
-    username: Optional[str] = None, bot_token: Optional[str] = None,
-) -> list[dict]:
-    require_ddb()
-
+def retrieve_messages(team_id, channel_id, q=None, from_date=None, to_date=None,
+                      user_id=None, limit=200, top_k=10, username=None, bot_token=None):
+    from app.utils import resolve_user_id  # avoid circular at top level
     if username and not user_id and bot_token:
         resolved = resolve_user_id(team_id, username, bot_token)
-        if resolved:
-            user_id = resolved
-        else:
-            logger.info(f"[retrieve] username '{username}' not found in workspace {team_id}")
-            return []
+        if resolved: user_id = resolved
+        else: return []
 
-    pk       = f"{team_id}#{channel_id}"
-    key_expr = Key("pk").eq(pk)
-    if from_date and to_date:
-        key_expr = key_expr & Key("sk").between(_date_to_sk(from_date), _date_to_sk(to_date, end_of_day=True))
-    elif from_date:
-        key_expr = key_expr & Key("sk").gte(_date_to_sk(from_date))
-    elif to_date:
-        key_expr = key_expr & Key("sk").lte(_date_to_sk(to_date, end_of_day=True))
+    pk = f"{team_id}#{channel_id}"
+    sql = "SELECT * FROM messages WHERE pk=?"
+    params: list = [pk]
+    if from_date: sql += " AND sk >= ?"; params.append(_date_to_sk(from_date))
+    if to_date:   sql += " AND sk <= ?"; params.append(_date_to_sk(to_date, end_of_day=True))
+    if user_id:   sql += " AND user_id = ?"; params.append(user_id)
+    sql += " ORDER BY sk DESC LIMIT ?"
+    params.append(limit)
 
-    kwargs = {"KeyConditionExpression": key_expr, "Limit": limit, "ScanIndexForward": False}
-    if user_id:
-        kwargs["FilterExpression"] = Attr("user_id").eq(user_id)
-    try:
-        response = ddb_table.query(**kwargs)
-        items    = response.get("Items", [])
-    except Exception as e:
-        raise RuntimeError(f"DynamoDB query failed: {e}")
+    from app.db import get_conn
+    with get_conn() as conn:
+        items = [dict(r) for r in conn.execute(sql, params).fetchall()]
 
     items = [i for i in items if not re.search(r"<@\w+> has (joined|left)", (i.get("text") or "").lower())]
-
-    if not q or not q.strip():
-        return _format_messages(items[:top_k])
-    if not _content_keywords(q):
-        return _format_messages(items[:top_k])
-    if user_id:
-        return _format_messages(items[:top_k])
-
-    matched = _score_messages(items, q)
-    return _format_messages(matched[:top_k])
-
-
+    if not q or not q.strip(): return _format_messages(items[:top_k])
+    if not _content_keywords(q): return _format_messages(items[:top_k])
+    if user_id: return _format_messages(items[:top_k])
+    return _format_messages(_score_messages(items, q)[:top_k])
 def retrieve_messages_multi(
     team_id: str, channel_ids: list[str],
     q: Optional[str] = None, from_date: Optional[str] = None,
@@ -151,63 +125,39 @@ def retrieve_messages_multi(
             logger.info(f"[retrieve_multi] username '{username}' not found in workspace {team_id}")
             return []
 
+    from app.db import get_conn
     all_raw: list[dict] = []
     for channel_id in channel_ids:
-        pk       = f"{team_id}#{channel_id}"
-        key_expr = Key("pk").eq(pk)
-        if from_date and to_date:
-            key_expr = key_expr & Key("sk").between(_date_to_sk(from_date), _date_to_sk(to_date, end_of_day=True))
-        elif from_date:
-            key_expr = key_expr & Key("sk").gte(_date_to_sk(from_date))
-        elif to_date:
-            key_expr = key_expr & Key("sk").lte(_date_to_sk(to_date, end_of_day=True))
+        pk = f"{team_id}#{channel_id}"
+        sql = "SELECT * FROM messages WHERE pk=?"
+        params: list = [pk]
+        if from_date: sql += " AND sk >= ?"; params.append(_date_to_sk(from_date))
+        if to_date:   sql += " AND sk <= ?"; params.append(_date_to_sk(to_date, end_of_day=True))
+        if user_id:   sql += " AND user_id = ?"; params.append(user_id)
+        sql += " ORDER BY sk DESC LIMIT ?"
+        params.append(limit)
 
-        kwargs = {"KeyConditionExpression": key_expr, "Limit": limit, "ScanIndexForward": False}
-        if user_id:
-            kwargs["FilterExpression"] = Attr("user_id").eq(user_id)
         try:
-            resp  = ddb_table.query(**kwargs)
-            items = resp.get("Items", [])
-            items = [i for i in items if not re.search(
-                r"<@\w+> has (joined|left)", (i.get("text") or "").lower())]
+            with get_conn() as conn:
+                items = [dict(r) for r in conn.execute(sql, params).fetchall()]
+            items = [i for i in items if not re.search(r"<@\w+> has (joined|left)", (i.get("text") or "").lower())]
             all_raw.extend(items)
         except Exception as e:
-            logger.warning(f"[retrieve_multi] DDB query failed for {channel_id}: {e}")
+            logger.warning(f"[retrieve_multi] DB query failed for {channel_id}: {e}")
 
     if not all_raw:
         return []
 
+    if not q or not q.strip():
+        all_raw.sort(key=lambda m: m.get("sk") or m.get("ts") or "", reverse=True)
+        return _format_messages(all_raw[:top_k])
+    if not _content_keywords(q):
+        all_raw.sort(key=lambda m: m.get("sk") or m.get("ts") or "", reverse=True)
+        return _format_messages(all_raw[:top_k])
     if user_id:
         all_raw.sort(key=lambda m: m.get("sk") or m.get("ts") or "", reverse=True)
         return _format_messages(all_raw[:top_k])
-
-    content_kws = _content_keywords(q) if q and q.strip() else []
-
-    if content_kws:
-        scored_pool = []
-        for item in all_raw:
-            text   = (item.get("text") or "").lower()
-            score  = sum(text.count(kw) for kw in content_kws)
-            score += sum(2 for kw in content_kws if kw in text[:80])
-            if len(content_kws) > 1 and " ".join(content_kws) in text:
-                score += 5
-            if len(text) > 800:
-                score = score * 800 / len(text)
-            if len(text) < 20:
-                score *= 0.5
-            if score > 0:
-                scored_pool.append((score, item))
-
-        scored_pool.sort(key=lambda x: x[0], reverse=True)
-        if _is_recency_query(q):
-            scored_pool.sort(key=lambda x: x[1].get("sk") or x[1].get("ts") or "", reverse=True)
-
-        top_items = [item for _, item in scored_pool[:top_k]]
-    else:
-        all_raw.sort(key=lambda m: m.get("sk") or m.get("ts") or "", reverse=True)
-        top_items = all_raw[:top_k]
-
-    return _format_messages(top_items)
+    return _format_messages(_score_messages(all_raw, q)[:top_k])
 
 
 # ── CONTEXT / PROMPT BUILDERS ─────────────────────────────────────────────────

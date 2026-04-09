@@ -1,25 +1,16 @@
 import re
-import json
 import time
 import hmac
 import hashlib
 from datetime import datetime
 from typing import Optional
 
-import boto3
 import requests
-from botocore.exceptions import ClientError
-from boto3.dynamodb.conditions import Key
-from fastapi import HTTPException, Response
+from fastapi import Response
 
-from app.constants import AWS_REGION, SECRET_PREFIX, DDB_TABLE, SESSIONS_TABLE, SLACK_API_BASE
+from app.constants import SLACK_API_BASE
 from app.logger import logger
-
-# ── AWS CLIENTS ───────────────────────────────────────────────────────────────
-secrets_client = boto3.client("secretsmanager", region_name=AWS_REGION)
-dynamodb       = boto3.resource("dynamodb", region_name=AWS_REGION)
-ddb_table      = dynamodb.Table(DDB_TABLE)      if DDB_TABLE      else None
-sessions_table = dynamodb.Table(SESSIONS_TABLE) if SESSIONS_TABLE else None
+from app.db import get_conn
 
 
 # ── HTTP HELPERS ──────────────────────────────────────────────────────────────
@@ -31,29 +22,41 @@ def no_cache(response: Response) -> Response:
     return response
 
 
-# ── SECRET MANAGEMENT ─────────────────────────────────────────────────────────
+# ── SECRET MANAGEMENT (SQLite-backed) ─────────────────────────────────────────
 
 def secret_name(team_id: str) -> str:
-    return f"{SECRET_PREFIX}/{team_id}"
+    """Returns the team_id itself as the lookup key."""
+    return team_id
 
 
-def upsert_secret(name: str, payload: dict) -> None:
-    body = json.dumps(payload)
-    try:
-        secrets_client.create_secret(Name=name, SecretString=body)
-    except ClientError as e:
-        if e.response["Error"]["Code"] == "ResourceExistsException":
-            secrets_client.put_secret_value(SecretId=name, SecretString=body)
-        else:
-            raise
+def upsert_secret(team_id: str, payload: dict) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO workspace_tokens(team_id, team_name, bot_user_id, bot_token, scope, updated_at)
+            VALUES(:team_id, :team_name, :bot_user_id, :bot_token, :scope, :updated_at)
+            ON CONFLICT(team_id) DO UPDATE SET
+                team_name   = excluded.team_name,
+                bot_user_id = excluded.bot_user_id,
+                bot_token   = excluded.bot_token,
+                scope       = excluded.scope,
+                updated_at  = excluded.updated_at
+            """,
+            {**payload, "updated_at": datetime.utcnow().isoformat() + "Z"},
+        )
 
 
-def read_secret(name: str) -> Optional[dict]:
-    try:
-        resp = secrets_client.get_secret_value(SecretId=name)
-        return json.loads(resp.get("SecretString", "{}"))
-    except ClientError as e:
-        return {"_error": e.response["Error"]["Code"], "_message": str(e)}
+def read_secret(team_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM workspace_tokens WHERE team_id = ?", (team_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_secret(team_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM workspace_tokens WHERE team_id = ?", (team_id,))
 
 
 def mask_token(token: str) -> str:
@@ -78,13 +81,6 @@ def verify_slack_signature(signing_secret: str, timestamp: str, body: bytes, sig
     base   = b"v0:" + timestamp.encode("utf-8") + b":" + body
     digest = hmac.new(signing_secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
     return hmac.compare_digest("v0=" + digest, signature)
-
-
-# ── DDB GUARD ─────────────────────────────────────────────────────────────────
-
-def require_ddb():
-    if ddb_table is None:
-        raise HTTPException(500, "DDB_TABLE environment variable is not set")
 
 
 # ── DATE / TIMESTAMP HELPERS ──────────────────────────────────────────────────
@@ -131,35 +127,41 @@ def _validate_channel_id(v: str) -> str:
 
 
 # ── USER CACHE ────────────────────────────────────────────────────────────────
-# pk = "{team_id}#__users__",  sk = user_id
-# Stores display_name + real_name so we can look up user_id by username.
 
 def _user_pk(team_id: str) -> str:
     return f"{team_id}#__users__"
 
 
 def get_cached_user(team_id: str, user_id: str) -> Optional[dict]:
-    if ddb_table is None:
-        return None
     try:
-        resp = ddb_table.get_item(Key={"pk": _user_pk(team_id), "sk": user_id})
-        return resp.get("Item")
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM user_cache WHERE pk = ? AND sk = ?",
+                (_user_pk(team_id), user_id),
+            ).fetchone()
+        return dict(row) if row else None
     except Exception:
         return None
 
 
 def upsert_cached_user(team_id: str, user_id: str, display_name: str, real_name: str) -> None:
-    if ddb_table is None:
-        return
     try:
-        ddb_table.put_item(Item={
-            "pk":           _user_pk(team_id),
-            "sk":           user_id,
-            "user_id":      user_id,
-            "display_name": display_name,
-            "real_name":    real_name,
-            "cached_at":    datetime.utcnow().isoformat() + "Z",
-        })
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_cache(pk, sk, user_id, display_name, real_name, cached_at)
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(pk, sk) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    real_name    = excluded.real_name,
+                    cached_at    = excluded.cached_at
+                """,
+                (
+                    _user_pk(team_id), user_id, user_id,
+                    display_name, real_name,
+                    datetime.utcnow().isoformat() + "Z",
+                ),
+            )
     except Exception as e:
         logger.warning(f"[user-cache] upsert failed for {user_id}: {e}")
 
@@ -167,7 +169,7 @@ def upsert_cached_user(team_id: str, user_id: str, display_name: str, real_name:
 def resolve_user_id(team_id: str, username: str, bot_token: str) -> Optional[str]:
     """
     Given a display name / real name (e.g. 'vrisha'), return the matching
-    Slack user_id. Checks the DynamoDB cache first; falls back to the
+    Slack user_id. Checks the SQLite cache first; falls back to the
     Slack users.list API and populates the cache.
     Returns None if no match is found.
     """
@@ -177,21 +179,23 @@ def resolve_user_id(team_id: str, username: str, bot_token: str) -> Optional[str
     needle = username.strip().lower()
 
     # ── 1. Check cache ────────────────────────────────────────────────────────
-    if ddb_table is not None:
-        try:
-            resp = ddb_table.query(KeyConditionExpression=Key("pk").eq(_user_pk(team_id)))
-            for item in resp.get("Items", []):
-                dn = (item.get("display_name") or "").lower()
-                rn = (item.get("real_name")    or "").lower()
-                if needle in dn or needle in rn or dn.startswith(needle) or rn.startswith(needle):
-                    logger.info(f"[user-cache] resolved '{username}' → {item['user_id']} (cache hit)")
-                    return item["user_id"]
-        except Exception as e:
-            logger.warning(f"[user-cache] cache query failed: {e}")
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM user_cache WHERE pk = ?", (_user_pk(team_id),)
+            ).fetchall()
+        for row in rows:
+            dn = (row["display_name"] or "").lower()
+            rn = (row["real_name"]    or "").lower()
+            if needle in dn or needle in rn or dn.startswith(needle) or rn.startswith(needle):
+                logger.info(f"[user-cache] resolved '{username}' → {row['user_id']} (cache hit)")
+                return row["user_id"]
+    except Exception as e:
+        logger.warning(f"[user-cache] cache query failed: {e}")
 
     # ── 2. Fetch from Slack and populate cache ────────────────────────────────
     logger.info(f"[user-cache] cache miss for '{username}', fetching users.list from Slack")
-    cursor = None
+    cursor: Optional[str] = None
     matched_id: Optional[str] = None
 
     while True:
@@ -225,7 +229,10 @@ def resolve_user_id(team_id: str, username: str, bot_token: str) -> Optional[str
                     dn_l, rn_l = dn.lower(), rn.lower()
                     if needle in dn_l or needle in rn_l or dn_l.startswith(needle) or rn_l.startswith(needle):
                         matched_id = uid
-                        logger.info(f"[user-cache] resolved '{username}' → {uid} (display='{dn}', real='{rn}')")
+                        logger.info(
+                            f"[user-cache] resolved '{username}' → {uid} "
+                            f"(display='{dn}', real='{rn}')"
+                        )
 
         cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
         if not cursor:
