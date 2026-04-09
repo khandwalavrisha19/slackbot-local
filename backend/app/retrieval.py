@@ -93,12 +93,12 @@ def retrieve_messages(team_id, channel_id, q=None, from_date=None, to_date=None,
         else: return []
 
     pk = f"{team_id}#{channel_id}"
-    sql = "SELECT * FROM messages WHERE pk=?"
+    sql = "SELECT * FROM messages WHERE pk=%s"
     params: list = [pk]
-    if from_date: sql += " AND sk >= ?"; params.append(_date_to_sk(from_date))
-    if to_date:   sql += " AND sk <= ?"; params.append(_date_to_sk(to_date, end_of_day=True))
-    if user_id:   sql += " AND user_id = ?"; params.append(user_id)
-    sql += " ORDER BY sk DESC LIMIT ?"
+    if from_date: sql += " AND sk >= %s"; params.append(_date_to_sk(from_date))
+    if to_date:   sql += " AND sk <= %s"; params.append(_date_to_sk(to_date, end_of_day=True))
+    if user_id:   sql += " AND user_id = %s"; params.append(user_id)
+    sql += " ORDER BY sk DESC LIMIT %s"
     params.append(limit)
 
     from app.db import get_conn
@@ -129,12 +129,12 @@ def retrieve_messages_multi(
     all_raw: list[dict] = []
     for channel_id in channel_ids:
         pk = f"{team_id}#{channel_id}"
-        sql = "SELECT * FROM messages WHERE pk=?"
+        sql = "SELECT * FROM messages WHERE pk=%s"
         params: list = [pk]
-        if from_date: sql += " AND sk >= ?"; params.append(_date_to_sk(from_date))
-        if to_date:   sql += " AND sk <= ?"; params.append(_date_to_sk(to_date, end_of_day=True))
-        if user_id:   sql += " AND user_id = ?"; params.append(user_id)
-        sql += " ORDER BY sk DESC LIMIT ?"
+        if from_date: sql += " AND sk >= %s"; params.append(_date_to_sk(from_date))
+        if to_date:   sql += " AND sk <= %s"; params.append(_date_to_sk(to_date, end_of_day=True))
+        if user_id:   sql += " AND user_id = %s"; params.append(user_id)
+        sql += " ORDER BY sk DESC LIMIT %s"
         params.append(limit)
 
         try:

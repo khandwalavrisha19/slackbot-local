@@ -18,7 +18,7 @@ def create_session() -> str:
     expires_at = int((datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS)).timestamp())
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO sessions(session_id, team_ids, created_at, expires_at) VALUES(?, ?, ?, ?)",
+            "INSERT INTO sessions(session_id, team_ids, created_at, expires_at) VALUES(%s, %s, %s, %s)",
             (session_id, "[]", datetime.utcnow().isoformat() + "Z", expires_at),
         )
     logger.info(f"[session] created {session_id}")
@@ -31,7 +31,7 @@ def get_session(session_id: str) -> Optional[dict]:
     try:
         with get_conn() as conn:
             row = conn.execute(
-                "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+                "SELECT * FROM sessions WHERE session_id = %s", (session_id,)
             ).fetchone()
         if not row:
             return None
@@ -54,7 +54,7 @@ def bind_team_to_session(session_id: str, team_id: str) -> None:
         current.append(team_id)
     with get_conn() as conn:
         conn.execute(
-            "UPDATE sessions SET team_ids = ? WHERE session_id = ?",
+            "UPDATE sessions SET team_ids = %s WHERE session_id = %s",
             (json.dumps(current), session_id),
         )
     logger.info(f"[session] bound team {team_id} to session {session_id}")
@@ -70,7 +70,7 @@ def unbind_team_from_session(session_id: str, team_id: str) -> None:
     try:
         with get_conn() as conn:
             conn.execute(
-                "UPDATE sessions SET team_ids = ? WHERE session_id = ?",
+                "UPDATE sessions SET team_ids = %s WHERE session_id = %s",
                 (json.dumps(updated), session_id),
             )
     except Exception as e:

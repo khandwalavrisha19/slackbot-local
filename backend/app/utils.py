@@ -34,13 +34,13 @@ def upsert_secret(team_id: str, payload: dict) -> None:
         conn.execute(
             """
             INSERT INTO workspace_tokens(team_id, team_name, bot_user_id, bot_token, scope, updated_at)
-            VALUES(:team_id, :team_name, :bot_user_id, :bot_token, :scope, :updated_at)
+            VALUES(%(team_id)s, %(team_name)s, %(bot_user_id)s, %(bot_token)s, %(scope)s, %(updated_at)s)
             ON CONFLICT(team_id) DO UPDATE SET
-                team_name   = excluded.team_name,
-                bot_user_id = excluded.bot_user_id,
-                bot_token   = excluded.bot_token,
-                scope       = excluded.scope,
-                updated_at  = excluded.updated_at
+                team_name   = EXCLUDED.team_name,
+                bot_user_id = EXCLUDED.bot_user_id,
+                bot_token   = EXCLUDED.bot_token,
+                scope       = EXCLUDED.scope,
+                updated_at  = EXCLUDED.updated_at
             """,
             {**payload, "updated_at": datetime.utcnow().isoformat() + "Z"},
         )
@@ -49,14 +49,14 @@ def upsert_secret(team_id: str, payload: dict) -> None:
 def read_secret(team_id: str) -> Optional[dict]:
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM workspace_tokens WHERE team_id = ?", (team_id,)
+            "SELECT * FROM workspace_tokens WHERE team_id = %s", (team_id,)
         ).fetchone()
     return dict(row) if row else None
 
 
 def delete_secret(team_id: str) -> None:
     with get_conn() as conn:
-        conn.execute("DELETE FROM workspace_tokens WHERE team_id = ?", (team_id,))
+        conn.execute("DELETE FROM workspace_tokens WHERE team_id = %s", (team_id,))
 
 
 def mask_token(token: str) -> str:
@@ -136,7 +136,7 @@ def get_cached_user(team_id: str, user_id: str) -> Optional[dict]:
     try:
         with get_conn() as conn:
             row = conn.execute(
-                "SELECT * FROM user_cache WHERE pk = ? AND sk = ?",
+                "SELECT * FROM user_cache WHERE pk = %s AND sk = %s",
                 (_user_pk(team_id), user_id),
             ).fetchone()
         return dict(row) if row else None
@@ -150,11 +150,11 @@ def upsert_cached_user(team_id: str, user_id: str, display_name: str, real_name:
             conn.execute(
                 """
                 INSERT INTO user_cache(pk, sk, user_id, display_name, real_name, cached_at)
-                VALUES(?, ?, ?, ?, ?, ?)
+                VALUES(%s, %s, %s, %s, %s, %s)
                 ON CONFLICT(pk, sk) DO UPDATE SET
-                    display_name = excluded.display_name,
-                    real_name    = excluded.real_name,
-                    cached_at    = excluded.cached_at
+                    display_name = EXCLUDED.display_name,
+                    real_name    = EXCLUDED.real_name,
+                    cached_at    = EXCLUDED.cached_at
                 """,
                 (
                     _user_pk(team_id), user_id, user_id,
@@ -182,7 +182,7 @@ def resolve_user_id(team_id: str, username: str, bot_token: str) -> Optional[str
     try:
         with get_conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM user_cache WHERE pk = ?", (_user_pk(team_id),)
+                "SELECT * FROM user_cache WHERE pk = %s", (_user_pk(team_id),)
             ).fetchall()
         for row in rows:
             dn = (row["display_name"] or "").lower()

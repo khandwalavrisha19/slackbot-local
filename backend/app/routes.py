@@ -323,12 +323,13 @@ def backfill_channel(team_id: str, channel_id: str, request: Request, limit: int
         from app.db import get_conn
         with get_conn() as conn:
             try:
-                conn.execute("""
-                    INSERT OR IGNORE INTO messages
+                cur = conn.execute("""
+                    INSERT INTO messages
                     (pk,sk,team_id,channel_id,ts,user_id,username,text,thread_ts,reply_count,subtype,type,fetched_at)
-                    VALUES(:pk,:sk,:team_id,:channel_id,:ts,:user_id,:username,:text,:thread_ts,:reply_count,:subtype,:type,:fetched_at)
+                    VALUES(%(pk)s,%(sk)s,%(team_id)s,%(channel_id)s,%(ts)s,%(user_id)s,%(username)s,%(text)s,%(thread_ts)s,%(reply_count)s,%(subtype)s,%(type)s,%(fetched_at)s)
+                    ON CONFLICT (pk, sk) DO NOTHING
                 """, item)
-                stored += conn.rowcount
+                stored += cur.rowcount
             except Exception as e:
                 raise
     next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
@@ -486,9 +487,10 @@ async def slack_events(request: Request):
     with get_conn() as conn:
         try:
             conn.execute("""
-                INSERT OR IGNORE INTO messages
+                INSERT INTO messages
                 (pk,sk,team_id,channel_id,ts,user_id,username,text,thread_ts,subtype,type,fetched_at)
-                VALUES(:pk,:sk,:team_id,:channel_id,:ts,:user_id,:username,:text,:thread_ts,:subtype,:type,:fetched_at)
+                VALUES(%(pk)s,%(sk)s,%(team_id)s,%(channel_id)s,%(ts)s,%(user_id)s,%(username)s,%(text)s,%(thread_ts)s,%(subtype)s,%(type)s,%(fetched_at)s)
+                ON CONFLICT (pk, sk) DO NOTHING
             """, item)
         except Exception as e:
             logger.error("DB insert failed for event", extra={
@@ -513,7 +515,7 @@ def db_messages(team_id: str, channel_id: str, request: Request, limit: int = 50
     try:
         with get_conn() as conn:
             items = [dict(r) for r in conn.execute(
-                "SELECT * FROM messages WHERE pk=? ORDER BY sk DESC LIMIT ?",
+                "SELECT * FROM messages WHERE pk=%s ORDER BY sk DESC LIMIT %s",
                 (f"{team_id}#{channel_id}", limit)
             ).fetchall()]
         return {"ok": True, "count": len(items), "items": items}
