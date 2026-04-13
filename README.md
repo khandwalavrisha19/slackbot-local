@@ -1,6 +1,6 @@
 # Slack Chatbot — Ask Questions About Your Slack Messages
 
-> **Live App:** https://d2586s68tp0zxo.cloudfront.net/
+> **Live App:** https://slackbot-local.onrender.com/
 
 This tool lets you search and ask AI-powered questions about your Slack message history — right from your browser. No coding needed to use it.
 
@@ -19,7 +19,7 @@ This tool lets you search and ask AI-powered questions about your Slack message 
 
 ### Step 1 — Open the App
 
-Go to: **https://d2586s68tp0zxo.cloudfront.net/**
+Go to: **https://slackbot-local.onrender.com/**
 
 ---
 
