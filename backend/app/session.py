@@ -84,8 +84,8 @@ def _set_session_cookie(response: Response, session_id: str) -> None:
         key      = SESSION_COOKIE_NAME,
         value    = session_id,
         httponly = True,
-        secure   = IS_PROD,
-        samesite = "lax",
+        secure   = True,              # Must be True for SameSite=None
+        samesite = "none",            # Allow cross-site cookies (Render -> Ngrok)
         max_age  = SESSION_TTL_HOURS * 3600,
         path     = "/",
     )

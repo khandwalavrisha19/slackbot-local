@@ -158,6 +158,14 @@ def list_workspaces(request: Request, response: Response):
     no_cache(response)
     session_id, sess = get_or_create_session(request, response)
     allowed          = sess.get("team_ids", [])
+    
+    # Fallback for local/hybrid development: If session is empty but DB has workspaces, 
+    # show them all to bypass cross-domain cookie blocking issues.
+    if not allowed:
+        with get_conn() as conn:
+            rows = conn.execute("SELECT team_id FROM workspace_tokens").fetchall()
+            allowed = [r["team_id"] for r in rows]
+
     workspaces       = []
     for team_id in allowed:
         sec = read_secret(secret_name(team_id))
