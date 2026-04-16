@@ -1,5 +1,8 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── SLACK BASE URLS ───────────────────────────────────────────────────────────
 # All Web API calls  → https://slack.com/api/<method>
@@ -22,6 +25,7 @@ SLACK_SCOPES         = os.getenv(
     "channels:history,chat:write,users:read,groups:history,channels:read,groups:read,channels:join",
 ).strip()
 CORS_ORIGINS         = os.getenv("CORS_ORIGINS", "*")
+DATABASE_URL         = os.getenv("DATABASE_URL", "").strip()
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "").strip()
 DB_PATH = os.getenv("DB_PATH", "slackbot.db").strip()
 GROQ_API_KEY         = os.getenv("GROQ_API_KEY", "").strip()

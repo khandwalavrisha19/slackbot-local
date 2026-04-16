@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.constants import PARSED_CORS_ORIGINS, FRONTEND_PATH
+from app.constants import PARSED_CORS_ORIGINS, FRONTEND_PATH, DATABASE_URL
 from app.exceptions import register_exception_handlers
 from app.routes import router
 from app.db import init_db

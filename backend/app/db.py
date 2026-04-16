@@ -1,10 +1,8 @@
 # app/db.py  — PostgreSQL backend (Supabase / Neon / any Postgres)
-import os
 import contextlib
 import psycopg2
 import psycopg2.extras   # RealDictCursor
-
-DATABASE_URL = os.getenv("DATABASE_URL", "")   # set this in Render env vars
+from app.constants import DATABASE_URL
 
 
 class _ConnWrapper:
