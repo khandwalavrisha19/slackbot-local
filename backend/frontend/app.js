@@ -3,9 +3,14 @@ let oauthPopup     = null;
 let searchMultiMode = false;
 let chatMultiMode   = false;
 const _multiSelections = {};
+let pollInterval    = null;
 
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
-function getApiBase() { return window.location.origin + "/api"; }
+function getApiBase() {
+  const custom = localStorage.getItem("backendUrl");
+  if (custom && custom.trim()) return custom.trim().replace(/\/$/, '') + "/api";
+  return window.location.origin + "/api";
+}
 function bust(url)    { return url + (url.includes("?") ? "&" : "?") + "_ts=" + Date.now(); }
 
 function setStatus(msg, type) {
@@ -128,27 +133,16 @@ function show(obj) {
       );
     }
     if (obj.backfill_all) {
-      const res = obj.backfill_all.results || [];
-      const ok  = res.filter(r => r.ok);
-      html += section("Backfill Summary",
-        statRow("Total stored", obj.backfill_all.total_stored ?? "—") +
-        statRow("Channels processed", res.length) +
-        statRow("Successful", ok.length)
+      html += section("Background Backfill Started",
+        statRow("Status", obj.backfill_all.message || "Running") + 
+        statRow("Channels", obj.backfill_all.total_channels ?? "—")
       );
-      if (ok.length) {
-        html += section("Per-channel",
-          ok.map(r => `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px;">
-            <span style="color:var(--text-soft);font-family:'DM Mono',monospace;">${esc(r.channel)}</span>
-            <span style="color:var(--success);font-weight:600;">${r.stored} stored</span>
-          </div>`).join("")
-        );
-      }
     }
     if (obj.join && !obj.join_all) html += section("Channel Joined", statRow("Channel", obj.join.channel_id || "✓"));
     if (obj.backfill && !obj.backfill_all) {
-      html += section("Backfill Complete",
-        statRow("Stored", obj.backfill.stored ?? "—") +
-        statRow("Has more", obj.backfill.has_more ? "Yes (paginate)" : "No")
+      html += section("Background Backfill Started",
+        statRow("Status", obj.backfill.message || "Running") +
+        statRow("Channel", obj.backfill.channel_id ?? "—")
       );
     }
   }
@@ -339,18 +333,31 @@ async function loadChannels() {
 }
 
 /* ── Backfill / Join ────────────────────────────────────────────────────────── */
-async function backfillOneChannel(team_id, channel_id) {
-  let cursor = "", totalStored = 0;
-  while (true) {
-    const url  = getApiBase() + "/backfill-channel?team_id=" + encodeURIComponent(team_id) + "&channel_id=" + encodeURIComponent(channel_id) + "&limit=200" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : "");
-    const data = await fetchJson(url, { method: "POST" });
-    if (!data.ok) return { ok: false, error: data };
-    totalStored += (data.stored_new || 0);
-    if (!data.has_more) break;
-    cursor = data.next_cursor || "";
-    await new Promise(res => setTimeout(res, 350));
+async function pollBackfillStatus() {
+  try {
+    const res = await fetchJson(getApiBase() + "/backfill/status");
+    if (res.ok && res.state) {
+      if (res.state.is_running) {
+        const mm = String(Math.floor(res.state.elapsed_seconds / 60)).padStart(2, '0');
+        const ss = String(res.state.elapsed_seconds % 60).padStart(2, '0');
+        setStatus(`Backfilling [${mm}:${ss}] — Stored: ${res.state.stored_new} (Channels: ${res.state.channels_done}/${res.state.total_channels})`, "warn");
+      } else {
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+          setStatus(`Backfill Complete — Stored: ${res.state.stored_new}`, "ok");
+        }
+      }
+    }
+  } catch (e) {
+    // ignore fetch errors during polling
   }
-  return { ok: true, stored: totalStored };
+}
+
+function startPolling() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollBackfillStatus();
+  pollInterval = setInterval(pollBackfillStatus, 1000);
 }
 
 async function joinSelectedAndBackfill() {
@@ -361,10 +368,11 @@ async function joinSelectedAndBackfill() {
     setStatus("Joining channel…");
     const j = await fetchJson(getApiBase() + "/join-channel?team_id=" + encodeURIComponent(team_id) + "&channel_id=" + encodeURIComponent(channel_id), { method: "POST" });
     if (!j.ok) { show(j); setStatus("Join failed", "err"); return; }
-    setStatus("Backfilling…");
-    const bf = await backfillOneChannel(team_id, channel_id);
+    
+    setStatus("Starting backfill background task…");
+    const bf = await fetchJson(getApiBase() + "/backfill-channel?team_id=" + encodeURIComponent(team_id) + "&channel_id=" + encodeURIComponent(channel_id), { method: "POST" });
     show({ join: j, backfill: bf });
-    setStatus(bf.ok ? ("Done — " + bf.stored + " stored") : "Backfill failed", bf.ok ? "ok" : "err");
+    if (bf.ok) startPolling();
   } catch (e) { show({ ok: false, error: String(e) }); setStatus("Failed", "err"); }
 }
 
@@ -384,10 +392,10 @@ async function backfillAllPublic() {
   try {
     const team_id = document.getElementById("workspaceSelect").value;
     if (!team_id) { setStatus("Select a workspace first", "warn"); return; }
-    setStatus("Backfilling all public channels…");
+    setStatus("Starting background backfill for public channels…");
     const data = await fetchJson(getApiBase() + "/backfill-all-public?team_id=" + encodeURIComponent(team_id), { method: "POST" });
     show({ backfill_all: data });
-    setStatus(data.ok ? ("Done — " + (data.total_stored || 0) + " stored") : "Backfill failed", data.ok ? "ok" : "err");
+    if (data.ok) startPolling();
   } catch (e) { show({ ok: false, error: String(e) }); setStatus("Failed", "err"); }
 }
 
@@ -395,10 +403,10 @@ async function backfillAllPrivate() {
   try {
     const team_id = document.getElementById("workspaceSelect").value;
     if (!team_id) { setStatus("Select a workspace first", "warn"); return; }
-    setStatus("Backfilling all private channels…");
+    setStatus("Starting background backfill for private channels…");
     const data = await fetchJson(getApiBase() + "/backfill-all-private?team_id=" + encodeURIComponent(team_id), { method: "POST" });
     show({ backfill_all: data });
-    setStatus(data.ok ? ("Done — " + (data.total_stored || 0) + " stored") : "Backfill failed", data.ok ? "ok" : "err");
+    if (data.ok) startPolling();
   } catch (e) { show({ ok: false, error: String(e) }); setStatus("Failed", "err"); }
 }
 
@@ -683,9 +691,62 @@ async function logout() {
   setStatus("Signed out", "warn");
 }
 
+/* ── Backend URL Panel ──────────────────────────────────────────────────── */
+function toggleBackendPanel() {
+  const body = document.getElementById("backendUrlBody");
+  body.style.display = body.style.display === "none" ? "block" : "none";
+}
+
+function _updateBackendIndicator() {
+  const custom = localStorage.getItem("backendUrl");
+  const ind    = document.getElementById("backendUrlIndicator");
+  const input  = document.getElementById("backendUrlInput");
+  if (custom && custom.trim()) {
+    ind.textContent = "custom";
+    ind.style.background = "rgba(245,158,11,0.12)";
+    ind.style.color      = "#f59e0b";
+    ind.style.border     = "1px solid rgba(245,158,11,0.3)";
+    if (input) input.value = custom;
+  } else {
+    ind.textContent = "auto";
+    ind.style.background = "rgba(109,191,160,0.12)";
+    ind.style.color      = "var(--success)";
+    ind.style.border     = "1px solid rgba(109,191,160,0.3)";
+    if (input) input.value = "";
+  }
+}
+
+function applyBackendUrl() {
+  const val = (document.getElementById("backendUrlInput").value || "").trim();
+  const st  = document.getElementById("backendUrlStatus");
+  if (!val) { resetBackendUrl(); return; }
+  try { new URL(val); } catch {
+    st.textContent = "⚠️ Invalid URL — make sure it starts with http:// or https://";
+    st.style.color = "var(--danger)";
+    return;
+  }
+  localStorage.setItem("backendUrl", val);
+  _updateBackendIndicator();
+  st.textContent = "✓ Backend URL saved! All requests will now go to: " + val;
+  st.style.color = "var(--success)";
+  setStatus("Backend URL updated — reloading workspaces…", "ok");
+  setTimeout(() => loadWorkspaces(), 800);
+}
+
+function resetBackendUrl() {
+  localStorage.removeItem("backendUrl");
+  document.getElementById("backendUrlInput").value = "";
+  _updateBackendIndicator();
+  const st = document.getElementById("backendUrlStatus");
+  st.textContent = "Reset to auto (using this same server).";
+  st.style.color = "var(--text-muted)";
+}
+
 /* ── Boot ───────────────────────────────────────────────────────────────────── */
 document.addEventListener("DOMContentLoaded", () => {
   const ta = document.getElementById("chatQuestion");
   if (ta) ta.addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") askChat(); });
+  _updateBackendIndicator();  // Restore saved backend URL on load
   initSession();
+  startPolling(); // Pick up status on load if a backfill is already running
 });

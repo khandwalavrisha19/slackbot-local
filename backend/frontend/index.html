@@ -39,6 +39,30 @@
   <div class="wrap">
     <div class="sidebar">
 
+      <!-- Backend URL -->
+      <div class="panel" id="backendUrlPanel">
+        <div class="panel-header" onclick="toggleBackendPanel()" style="cursor:pointer;user-select:none;">
+          <span class="step-badge" style="background:rgba(155,127,232,0.18);color:var(--accent);">⚙</span>
+          <span class="panel-title">Backend URL</span>
+          <span id="backendUrlIndicator" style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:999px;background:rgba(109,191,160,0.12);color:var(--success);border:1px solid rgba(109,191,160,0.3);">auto</span>
+        </div>
+        <div class="panel-body" id="backendUrlBody" style="display:none;">
+          <p class="hint">By default, the UI talks to <strong>this same server</strong>. If your backend is running locally or via Ngrok, paste that URL here.</p>
+          <div class="field">
+            <label>Backend Base URL</label>
+            <input id="backendUrlInput"
+              placeholder="e.g. https://xyz.ngrok-free.app or http://192.168.1.5:8000"
+              style="font-family:'DM Mono',monospace;font-size:12px;"
+            />
+          </div>
+          <div class="btn-group">
+            <button class="primary" onclick="applyBackendUrl()">Apply</button>
+            <button onclick="resetBackendUrl()">Reset to Auto</button>
+          </div>
+          <div id="backendUrlStatus" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
+        </div>
+      </div>
+
       <!-- Connect -->
       <div class="panel">
         <div class="panel-header">

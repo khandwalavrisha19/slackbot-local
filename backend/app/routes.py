@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 import requests
-from fastapi import APIRouter, Request, Query, HTTPException, Response
+from fastapi import APIRouter, Request, Query, HTTPException, Response, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from urllib.parse import urlencode
 
@@ -19,6 +19,7 @@ from app.utils import (
     no_cache, secret_name, read_secret, upsert_secret, delete_secret, mask_token,
     verify_slack_signature, resolve_username_for_message, extract_username_from_question,
 )
+import time
 from app.session import (
     get_or_create_session, require_team_access, create_session,
     get_session, bind_team_to_session, unbind_team_from_session, _set_session_cookie,
@@ -302,66 +303,156 @@ def join_all_public(team_id: str, request: Request):
     return {"ok": True, "joined_count": len(joined), "failed_count": len(failed), "failed": failed}
 
 
+# ── BACKFILL STATE & BACKGROUND TASK ──────────────────────────────────────────
+
+backfill_state = {
+    "is_running": False,
+    "start_time": None,
+    "current_channel": None,
+    "stored_new": 0,
+    "total_channels": 0,
+    "channels_done": 0,
+    "error": None
+}
+
+def _run_backfill(team_id: str, channel_ids: list[str], bot_token: str):
+    from app.db import get_conn
+    from app.utils import resolve_username_for_message
+    from app.logger import logger
+    
+    global backfill_state
+    backfill_state.update({
+        "is_running": True,
+        "start_time": time.time(),
+        "current_channel": None,
+        "stored_new": 0,
+        "total_channels": len(channel_ids),
+        "channels_done": 0,
+        "error": None
+    })
+    
+    try:
+        for ch_id in channel_ids:
+            backfill_state["current_channel"] = ch_id
+            cursor = ""
+            while True:
+                params = {"channel": ch_id, "limit": 200}
+                if cursor:
+                    params["cursor"] = cursor
+                
+                try:
+                    r = requests.get(f"{SLACK_API_BASE}/conversations.history",
+                                     headers={"Authorization": f"Bearer {bot_token}"},
+                                     params=params, timeout=20)
+                    data = r.json()
+                except Exception as e:
+                    logger.error(f"Backfill request failed for {ch_id}: {e}")
+                    backfill_state["error"] = str(e)
+                    break
+                    
+                if not data.get("ok"):
+                    logger.error(f"Slack API error backfilling {ch_id}: {data}")
+                    backfill_state["error"] = str(data.get("error", "Unknown API Error"))
+                    break
+                    
+                msgs = data.get("messages", []) or []
+                if not msgs:
+                    break
+                    
+                pk = f"{team_id}#{ch_id}"
+                stored = 0
+                
+                try:
+                    with get_conn() as conn:
+                        for m in msgs:
+                            ts_msg = str(m.get("ts"))
+                            if not ts_msg: continue
+                            uid = m.get("user")
+                            username = resolve_username_for_message(team_id, uid, bot_token) if uid else ""
+                            item = {
+                                "pk": pk, "sk": ts_msg,
+                                "team_id": team_id, "channel_id": ch_id, "ts": ts_msg,
+                                "user_id": uid, "username": username, "text": m.get("text", ""),
+                                "thread_ts": m.get("thread_ts"), "reply_count": m.get("reply_count", 0),
+                                "subtype": m.get("subtype"), "type": m.get("type"),
+                                "fetched_at": datetime.utcnow().isoformat() + "Z",
+                            }
+                            cur = conn.execute("""
+                                INSERT INTO messages
+                                (pk,sk,team_id,channel_id,ts,user_id,username,text,thread_ts,reply_count,subtype,type,fetched_at)
+                                VALUES(%(pk)s,%(sk)s,%(team_id)s,%(channel_id)s,%(ts)s,%(user_id)s,%(username)s,%(text)s,%(thread_ts)s,%(reply_count)s,%(subtype)s,%(type)s,%(fetched_at)s)
+                                ON CONFLICT (pk, sk) DO NOTHING
+                            """, item)
+                            stored += cur.rowcount
+                except Exception as e:
+                    logger.error(f"DB error during backfill batch: {e}")
+                    backfill_state["error"] = str(e)
+                    break
+                    
+                backfill_state["stored_new"] += stored
+                next_cursor = (data.get("response_metadata") or {}).get("next_cursor")
+                if not next_cursor:
+                    break
+                cursor = next_cursor
+                time.sleep(1.2)  # Avoid rate limiting
+                
+            backfill_state["channels_done"] += 1
+            if backfill_state["error"]:
+                break
+                
+    except Exception as e:
+        import traceback
+        logger.error(f"Critical error in backfill loop: {traceback.format_exc()}")
+        backfill_state["error"] = str(e)
+    finally:
+        backfill_state["is_running"] = False
+
+
+# ── BACKFILL STATUS ───────────────────────────────────────────────────────────
+
+@router.get("/backfill/status")
+@router.get("/api/backfill/status")
+def backfill_status(request: Request, response: Response):
+    no_cache(response)
+    # Simple status check, accessible cross-workspace context for UX
+    state = dict(backfill_state)
+    if state["start_time"]:
+        state["elapsed_seconds"] = int(time.time() - state["start_time"])
+    else:
+        state["elapsed_seconds"] = 0
+    return {"ok": True, "state": state}
+
+
 # ── BACKFILL CHANNEL ──────────────────────────────────────────────────────────
 
 @router.post("/backfill-channel")
 @router.post("/api/backfill-channel")
-def backfill_channel(team_id: str, channel_id: str, request: Request, limit: int = 200, cursor: str | None = None):
+def backfill_channel(team_id: str, channel_id: str, request: Request, background_tasks: BackgroundTasks):
     require_team_access(request, team_id)
+    if backfill_state["is_running"]:
+        return {"ok": False, "message": "A backfill operation is already running"}
+        
     sec = read_secret(secret_name(team_id))
     if not sec or not sec.get("bot_token"):
         return {"ok": False, "message": "bot_token missing"}
-    params = {"channel": channel_id, "limit": limit}
-    if cursor:
-        params["cursor"] = cursor
-    data = requests.get(f"{SLACK_API_BASE}/conversations.history",
-                        headers={"Authorization": f"Bearer {sec['bot_token']}"},
-                        params=params, timeout=20).json()
-    if not data.get("ok"):
-        return {"ok": False, "slack_error": data}
-    msgs = data.get("messages", []) or []
-    pk   = f"{team_id}#{channel_id}"
-    stored = 0
-    from app.db import get_conn
-    with get_conn() as conn:
-        for m in msgs:
-            ts_msg = str(m.get("ts"))
-            if not ts_msg:
-                continue
-            uid      = m.get("user")
-            username = resolve_username_for_message(team_id, uid, sec["bot_token"]) if uid else ""
-            item = {
-                "pk": pk, "sk": ts_msg,
-                "team_id": team_id, "channel_id": channel_id, "ts": ts_msg,
-                "user_id": uid, "username": username, "text": m.get("text", ""),
-                "thread_ts": m.get("thread_ts"), "reply_count": m.get("reply_count", 0),
-                "subtype": m.get("subtype"), "type": m.get("type"),
-                "fetched_at": datetime.utcnow().isoformat() + "Z",
-            }
-            try:
-                cur = conn.execute("""
-                    INSERT INTO messages
-                    (pk,sk,team_id,channel_id,ts,user_id,username,text,thread_ts,reply_count,subtype,type,fetched_at)
-                    VALUES(%(pk)s,%(sk)s,%(team_id)s,%(channel_id)s,%(ts)s,%(user_id)s,%(username)s,%(text)s,%(thread_ts)s,%(reply_count)s,%(subtype)s,%(type)s,%(fetched_at)s)
-                    ON CONFLICT (pk, sk) DO NOTHING
-                """, item)
-                stored += cur.rowcount
-            except Exception as e:
-                raise
-    next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
-    return {"ok": True, "channel_id": channel_id, "fetched": len(msgs),
-            "stored_new": stored, "next_cursor": next_cursor, "has_more": bool(next_cursor)}
+        
+    background_tasks.add_task(_run_backfill, team_id, [channel_id], sec['bot_token'])
+    return {"ok": True, "channel_id": channel_id, "message": "Backfill started in background"}
 
 
 # ── BACKFILL ALL PUBLIC ───────────────────────────────────────────────────────
 
 @router.post("/backfill-all-public")
 @router.post("/api/backfill-all-public")
-def backfill_all_public(team_id: str, request: Request):
+def backfill_all_public(team_id: str, request: Request, background_tasks: BackgroundTasks):
     require_team_access(request, team_id)
+    if backfill_state["is_running"]:
+        return {"ok": False, "message": "A backfill operation is already running"}
+
     sec = read_secret(secret_name(team_id))
     if not sec or not sec.get("bot_token"):
         return {"ok": False, "message": "bot_token missing"}
+        
     all_channels, cursor = [], None
     while True:
         params = {"limit": 200, "types": "public_channel", "exclude_archived": "true"}
@@ -378,34 +469,24 @@ def backfill_all_public(team_id: str, request: Request):
         cursor = (lst.get("response_metadata") or {}).get("next_cursor") or ""
         if not cursor:
             break
-    total_stored, results = 0, []
-    for ch_id in all_channels:
-        bf_cursor, stored, ok = "", 0, True
-        while True:
-            bf = backfill_channel(team_id=team_id, channel_id=ch_id, request=request,
-                                   limit=200, cursor=bf_cursor if bf_cursor else None)
-            if not bf.get("ok"):
-                ok = False
-                break
-            stored += bf.get("stored_new", 0)
-            if not bf.get("has_more"):
-                break
-            bf_cursor = bf.get("next_cursor", "")
-        results.append({"channel": ch_id, "ok": ok, "stored": stored})
-        if ok:
-            total_stored += stored
-    return {"ok": True, "total_stored": total_stored, "results": results}
+            
+    background_tasks.add_task(_run_backfill, team_id, all_channels, sec['bot_token'])
+    return {"ok": True, "total_channels": len(all_channels), "message": "Backfill started in background"}
 
 
 # ── BACKFILL ALL PRIVATE ──────────────────────────────────────────────────────
 
 @router.post("/backfill-all-private")
 @router.post("/api/backfill-all-private")
-def backfill_all_private(team_id: str, request: Request):
+def backfill_all_private(team_id: str, request: Request, background_tasks: BackgroundTasks):
     require_team_access(request, team_id)
+    if backfill_state["is_running"]:
+        return {"ok": False, "message": "A backfill operation is already running"}
+
     sec = read_secret(secret_name(team_id))
     if not sec or not sec.get("bot_token"):
         return {"ok": False, "message": "bot_token missing"}
+        
     all_channels, cursor = [], None
     while True:
         params = {"limit": 200, "types": "private_channel", "exclude_archived": "true"}
@@ -422,23 +503,9 @@ def backfill_all_private(team_id: str, request: Request):
         cursor = (lst.get("response_metadata") or {}).get("next_cursor") or ""
         if not cursor:
             break
-    total_stored, results = 0, []
-    for ch_id in all_channels:
-        bf_cursor, stored, ok = "", 0, True
-        while True:
-            bf = backfill_channel(team_id=team_id, channel_id=ch_id, request=request,
-                                   limit=200, cursor=bf_cursor if bf_cursor else None)
-            if not bf.get("ok"):
-                ok = False
-                break
-            stored += bf.get("stored_new", 0)
-            if not bf.get("has_more"):
-                break
-            bf_cursor = bf.get("next_cursor", "")
-        results.append({"channel": ch_id, "ok": ok, "stored": stored})
-        if ok:
-            total_stored += stored
-    return {"ok": True, "total_stored": total_stored, "results": results}
+            
+    background_tasks.add_task(_run_backfill, team_id, all_channels, sec['bot_token'])
+    return {"ok": True, "total_channels": len(all_channels), "message": "Backfill started in background"}
 
 
 # ── SLACK EVENTS WEBHOOK ──────────────────────────────────────────────────────
