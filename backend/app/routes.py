@@ -320,7 +320,8 @@ backfill_state = {
     "stored_new": 0,
     "total_channels": 0,
     "channels_done": 0,
-    "error": None
+    "error": None,
+    "end_time": None
 }
 
 def _run_backfill(team_id: str, channel_ids: list[str], bot_token: str):
@@ -336,7 +337,8 @@ def _run_backfill(team_id: str, channel_ids: list[str], bot_token: str):
         "stored_new": 0,
         "total_channels": len(channel_ids),
         "channels_done": 0,
-        "error": None
+        "error": None,
+        "end_time": None   # Reset end time
     })
     
     try:
@@ -413,6 +415,7 @@ def _run_backfill(team_id: str, channel_ids: list[str], bot_token: str):
         logger.error(f"Critical error in backfill loop: {traceback.format_exc()}")
         backfill_state["error"] = str(e)
     finally:
+        backfill_state["end_time"] = time.time()
         backfill_state["is_running"] = False
 
 
@@ -424,8 +427,10 @@ def backfill_status(request: Request, response: Response):
     no_cache(response)
     # Simple status check, accessible cross-workspace context for UX
     state = dict(backfill_state)
-    if state["start_time"]:
+    if state["is_running"] and state["start_time"]:
         state["elapsed_seconds"] = int(time.time() - state["start_time"])
+    elif state["start_time"] and state["end_time"]:
+        state["elapsed_seconds"] = int(state["end_time"] - state["start_time"])
     else:
         state["elapsed_seconds"] = 0
     return {"ok": True, "state": state}

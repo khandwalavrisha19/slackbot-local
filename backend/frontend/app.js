@@ -7,8 +7,6 @@ let pollInterval    = null;
 
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
 function getApiBase() {
-  const custom = localStorage.getItem("backendUrl");
-  if (custom && custom.trim()) return custom.trim().replace(/\/$/, '') + "/api";
   return window.location.origin + "/api";
 }
 function bust(url)    { return url + (url.includes("?") ? "&" : "?") + "_ts=" + Date.now(); }
@@ -345,7 +343,9 @@ async function pollBackfillStatus() {
         if (pollInterval) {
           clearInterval(pollInterval);
           pollInterval = null;
-          setStatus(`Backfill Complete — Stored: ${res.state.stored_new}`, "ok");
+          const mm = String(Math.floor(res.state.elapsed_seconds / 60)).padStart(2, '0');
+          const ss = String(res.state.elapsed_seconds % 60).padStart(2, '0');
+          setStatus(`Backfill Complete — Took [${mm}:${ss}] · Stored: ${res.state.stored_new}`, "ok");
         }
       }
     }
@@ -691,62 +691,11 @@ async function logout() {
   setStatus("Signed out", "warn");
 }
 
-/* ── Backend URL Panel ──────────────────────────────────────────────────── */
-function toggleBackendPanel() {
-  const body = document.getElementById("backendUrlBody");
-  body.style.display = body.style.display === "none" ? "block" : "none";
-}
-
-function _updateBackendIndicator() {
-  const custom = localStorage.getItem("backendUrl");
-  const ind    = document.getElementById("backendUrlIndicator");
-  const input  = document.getElementById("backendUrlInput");
-  if (custom && custom.trim()) {
-    ind.textContent = "custom";
-    ind.style.background = "rgba(245,158,11,0.12)";
-    ind.style.color      = "#f59e0b";
-    ind.style.border     = "1px solid rgba(245,158,11,0.3)";
-    if (input) input.value = custom;
-  } else {
-    ind.textContent = "auto";
-    ind.style.background = "rgba(109,191,160,0.12)";
-    ind.style.color      = "var(--success)";
-    ind.style.border     = "1px solid rgba(109,191,160,0.3)";
-    if (input) input.value = "";
-  }
-}
-
-function applyBackendUrl() {
-  const val = (document.getElementById("backendUrlInput").value || "").trim();
-  const st  = document.getElementById("backendUrlStatus");
-  if (!val) { resetBackendUrl(); return; }
-  try { new URL(val); } catch {
-    st.textContent = "⚠️ Invalid URL — make sure it starts with http:// or https://";
-    st.style.color = "var(--danger)";
-    return;
-  }
-  localStorage.setItem("backendUrl", val);
-  _updateBackendIndicator();
-  st.textContent = "✓ Backend URL saved! All requests will now go to: " + val;
-  st.style.color = "var(--success)";
-  setStatus("Backend URL updated — reloading workspaces…", "ok");
-  setTimeout(() => loadWorkspaces(), 800);
-}
-
-function resetBackendUrl() {
-  localStorage.removeItem("backendUrl");
-  document.getElementById("backendUrlInput").value = "";
-  _updateBackendIndicator();
-  const st = document.getElementById("backendUrlStatus");
-  st.textContent = "Reset to auto (using this same server).";
-  st.style.color = "var(--text-muted)";
-}
 
 /* ── Boot ───────────────────────────────────────────────────────────────────── */
 document.addEventListener("DOMContentLoaded", () => {
   const ta = document.getElementById("chatQuestion");
   if (ta) ta.addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") askChat(); });
-  _updateBackendIndicator();  // Restore saved backend URL on load
   initSession();
   startPolling(); // Pick up status on load if a backfill is already running
 });
